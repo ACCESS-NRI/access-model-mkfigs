@@ -12,7 +12,9 @@ internet access) after mkfigs.sh completes:
     cd /g/data/tm70/cyb561/repos/<paper-repo>/notebooks
     mkfigs-pushit
     mkfigs-pushit --dry-run                  # preview: nothing written or uploaded
-    mkfigs-pushit --skip-figshare            # copy files, but skip upload
+    mkfigs-pushit --skip-figshare            # copy .md files, but skip upload
+    mkfigs-pushit --local                    # full local preview, no Figshare at all
+                                                (see "Local preview" below)
     mkfigs-pushit --ename MC_25km_...        # override experiment name
     mkfigs-pushit --check-figshare-integrity # verify uploads complete/duplicate-free
     mkfigs-pushit --check-figshare-upload    # verify URLs public, print git commands
@@ -26,6 +28,26 @@ Suggested workflow:
   4. mkfigs-pushit --check-figshare-upload  — verify URLs, get git commands
                                                 (checks public reachability, so this
                                                 only makes sense AFTER publishing)
+
+Local preview (--local):
+  Figshare articles can't be deleted once created, so iterating on the site
+  itself (nav structure, captions, layout) by repeatedly pushing to Figshare
+  is wasteful. --local skips Figshare entirely and instead copies the real
+  PNGs and the real rendered notebook (with outputs, not the stripped copy
+  that normally goes to git) straight into the docs tree, at the exact
+  paths mkdocs/mkfigs.fetch would otherwise have populated from Figshare.
+  `mkdocs serve` in documentation/ then shows the actual site, with real
+  figures and a real "Full Notebook" page, using zero Figshare calls.
+
+  This writes to docs/assets/experiments/<ename>/ and
+  docs/pages/experiments/<ename>/notebooks/ -- NEVER commit these, and
+  delete them before a real (non---local) push, or a stale local file
+  will silently shadow a future real update. Nothing in --local touches
+  notebooks_urls.json, so it can't corrupt the real Figshare-backed state.
+
+  No real run yet? See mkfigs-placeholder, which fakes the same
+  "notebook already ran" output shape --local expects, purely to preview
+  nav/page structure before any papermill run.
 
 Figshare token: set FIGSHARE_TOKEN env var, or store in ~/.figshare_token.
 """
@@ -127,7 +149,8 @@ def parse_mkfigs_sh() -> tuple[str, str, list[str]]:
 
 HERE = _find_notebooks_dir()
 REPO = HERE.parent
-DOCS_PAGES = REPO / "documentation" / "docs" / "pages"
+DOCS_ROOT = REPO / "documentation" / "docs"
+DOCS_PAGES = DOCS_ROOT / "pages"
 MKDOCS_YML = REPO / "documentation" / "mkdocs.yml"
 # ---------------------------------------------------------------------------
 # Author list from CITATION.cff
@@ -337,6 +360,41 @@ def upload_figshare_for_notebook(
         print(f"[figshare] Article: {article_url}")
 
     return url_map.get("_notebook")
+
+
+def copy_local_preview_assets(
+    mdfol: Path, ofol: Path, ename: str, nb_name: str, png_names: list[str], docs_root: Path
+) -> None:
+    """--local equivalent of upload_figshare_for_notebook: copies the same
+    two things (PNGs + the output-bearing rendered notebook) straight into
+    the docs tree instead of uploading them anywhere.
+
+    PNGs go to docs/assets/experiments/<ename>/ -- the site-absolute image
+    path _mkmd_notebook already writes (/assets/experiments/<ename>/<png>)
+    resolves to exactly this location once mkdocs copies it as a static
+    file, so the .md files need no rewriting for local preview to work.
+
+    The rendered notebook goes to the same
+    pages/experiments/<ename>/notebooks/<nb>.ipynb path mkfigs.fetch would
+    have downloaded it to from Figshare, using the *output-bearing* copy
+    (mkfigs.run only strips outputs from the copy returned to notebooks/),
+    so mkdocs-jupyter renders it immediately without needing a real run.
+
+    png_names is assign_pngs_to_notebooks()'s output: bare filenames
+    (strings) relative to mdfol, not paths.
+    """
+    assets_dir = docs_root / "assets" / "experiments" / ename
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    for png_name in png_names:
+        shutil.copy2(mdfol / png_name, assets_dir / png_name)
+
+    rendered = ofol / f"{nb_name}_rendered.ipynb"
+    if rendered.exists():
+        nb_dir = docs_root / "pages" / "experiments" / ename / "notebooks"
+        nb_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(rendered, nb_dir / f"{nb_name}.ipynb")
+    else:
+        print(f"[local] WARNING: rendered notebook not found for {nb_name}: {rendered}")
 
 
 # ---------------------------------------------------------------------------
@@ -908,6 +966,11 @@ def main() -> None:
                    help="Report results and echo git commands without copying files")
     p.add_argument("--skip-figshare", action="store_true",
                    help="Skip Figshare upload even if a token is available")
+    p.add_argument("--local", action="store_true",
+                   help="Full local preview: skip Figshare, copy real PNGs and the "
+                        "output-bearing rendered notebook straight into the docs tree "
+                        "so `mkdocs serve` shows the real site. Never commit the "
+                        "output this writes -- see the module docstring.")
     p.add_argument("--ename", default=None,
                    help="Override experiment name (default: parsed from mkfigs.sh)")
     p.add_argument("--check-figshare-upload", action="store_true",
@@ -1052,6 +1115,10 @@ def main() -> None:
 
     if args.dry_run:
         print(f"[figshare] DRY RUN: would upload PNGs + rendered notebooks from {mdfol} / {ofol}")
+    elif args.local:
+        print(f"[local] Copying real PNGs + rendered notebooks into {DOCS_ROOT} (no Figshare).")
+        for nb in ok_nbs:
+            copy_local_preview_assets(mdfol, ofol, ename, nb, pngs_by_notebook.get(nb, []), DOCS_ROOT)
     elif args.skip_figshare:
         print("[figshare] Upload skipped (--skip-figshare).")
     else:
@@ -1075,7 +1142,7 @@ def main() -> None:
     # staleness issue fixed elsewhere, just via merge-and-carry-forward
     # instead of a one-shot string replace.
     carried_forward = {nb: u for nb, u in existing_urls.items() if nb not in notebook_urls}
-    if carried_forward and not args.dry_run and not args.skip_figshare:
+    if carried_forward and not args.dry_run and not args.skip_figshare and not args.local:
         _token = resolve_figshare_token()
         if _token:
             _uploader = FigshareUploader(_token, ename, str(mdfol))
@@ -1134,7 +1201,10 @@ def main() -> None:
             print(f"  WARNING: {src_md} not found — skipping")
 
     # Write notebooks_urls.json so .readthedocs.yaml can download notebooks
-    # at build time (notebooks are too large to commit to git).
+    # at build time (notebooks are too large to commit to git). Skipped
+    # entirely for --local: it's the real Figshare-backed manifest, and a
+    # local preview run must never be able to write/overwrite it, or a
+    # later real push could carry forward local-only state.
     if args.dry_run:
         print(f"  [notebooks_urls] DRY RUN: would write {urls_json_path}")
         if all_notebook_urls:
@@ -1142,6 +1212,8 @@ def main() -> None:
                 print(f"    {nb}: {url}")
         else:
             print("    (no notebook URLs yet — run without --dry-run with a figshare token)")
+    elif args.local:
+        print(f"  [notebooks_urls] Skipped (--local) -- {urls_json_rel} left untouched.")
     else:
         experiment_docs_dir.mkdir(parents=True, exist_ok=True)
         urls_json_path.write_text(json.dumps(all_notebook_urls, indent=2) + "\n")
@@ -1169,17 +1241,30 @@ def main() -> None:
     update_mkdocs_nav(ename=ename, ok_nbs=all_nav_nbs, dry_run=args.dry_run)
 
     # -----------------------------------------------------------------------
-    # Next step: publish on Figshare, then get git commands
+    # Next step: publish on Figshare, then get git commands (skipped for
+    # --local, which has nothing to publish and nothing safe to commit)
     # -----------------------------------------------------------------------
     print()
-    print("Files uploaded to Figshare and copied into the docs tree.")
-    print()
-    print("Next steps:")
-    print("  1. Go to Figshare and PUBLISH the article so all URLs become public.")
-    print("  2. Verify and get git commands by running:")
-    _ename_flag = f" --ename {ename}" if args.ename else ""
-    print(f"       mkfigs-pushit --check-figshare-upload{_ename_flag}")
-    print()
+    if args.local:
+        print("LOCAL PREVIEW ONLY -- nothing was uploaded, nothing was committed anywhere.")
+        print()
+        print(f"  cd {REPO / 'documentation'} && mkdocs serve")
+        print()
+        print("Do NOT commit what this just wrote:")
+        print(f"  {DOCS_ROOT / 'assets' / 'experiments' / ename}")
+        print(f"  {experiment_docs_dir / 'notebooks'}")
+        print("Delete both before a real (non---local) mkfigs-pushit run, so a stale")
+        print("local file can't silently shadow a future real update.")
+        print()
+    else:
+        print("Files uploaded to Figshare and copied into the docs tree.")
+        print()
+        print("Next steps:")
+        print("  1. Go to Figshare and PUBLISH the article so all URLs become public.")
+        print("  2. Verify and get git commands by running:")
+        _ename_flag = f" --ename {ename}" if args.ename else ""
+        print(f"       mkfigs-pushit --check-figshare-upload{_ename_flag}")
+        print()
 
 
 if __name__ == "__main__":
