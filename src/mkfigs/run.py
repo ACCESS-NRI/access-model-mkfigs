@@ -89,6 +89,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ename",   required=True, help="Experiment name (ENAME)")
     p.add_argument("--esmdir",  required=True, help="Path to ESM datastore JSON")
     p.add_argument("--wfolder", required=True, help="Repo root folder")
+    p.add_argument(
+        "--notebooks-subdir", default="",
+        help="Subdirectory under <wfolder>/notebooks/ where the .ipynb files "
+             "actually live (e.g. 'polished-python' for access-cm3-paper-1). "
+             "Default '' preserves the original access-om3-paper-1 layout, "
+             "where notebooks sit directly in <wfolder>/notebooks/.",
+    )
     return p.parse_args()
 
 
@@ -139,7 +146,7 @@ def main() -> None:
 
     ename  = args.ename
     esmdir = args.esmdir
-    notebooks_dir = Path(args.wfolder) / "notebooks"
+    notebooks_dir = Path(args.wfolder) / "notebooks" / args.notebooks_subdir
 
     ofol  = notebooks_dir / f"mkfigs_output_{ename}"
     mdfol = ofol / "mkmd"

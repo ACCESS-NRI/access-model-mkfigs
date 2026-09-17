@@ -29,10 +29,11 @@ jobs:
             environment-file: ci/environment-${{ matrix.python-version }}.yml
             activate-environment: mkfigs-${{ matrix.python-version }}
             auto-activate-base: false
+            conda-remove-defaults: "true"
 
       - name: Install source
         shell: bash -l {0}
-        run: python -m pip install .
+        run: python -m pip install ".[dev]"
 
       - name: List installed packages
         shell: bash -l {0}
@@ -41,7 +42,7 @@ jobs:
       - name: Run tests
         shell: bash -l {0}
         run: coverage run -m --source=mkfigs pytest tests
-      
+
       - name: Generate coverage report
         shell: bash -l {0}
         run: coverage xml
@@ -49,5 +50,5 @@ jobs:
       - name: Upload code coverage
         uses: codecov/codecov-action@v5
         with:
-          token:  ${{ secrets.codecov_token }} 
+          token:  ${{ secrets.codecov_token }}
           files: ./coverage.xml

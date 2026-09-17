@@ -38,13 +38,23 @@ dependencies = [
 dev = [
     "coverage",  # testing
     "pytest",  # testing
+    "responses",  # mocks requests.request/.put for the Figshare-API test double in tests/conftest.py
     "ruff"  # linting
+    ]
+docstest = [
+    # Only needed for tests/test_mkdocs_build_offline.py, which skips
+    # itself gracefully if these aren't installed. Kept separate from
+    # `dev` so the fast unit/integration layer never needs mkdocs at all.
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.6.11",
+    "mkdocs-jupyter>=0.24.0",
     ]
 
 [project.scripts]
-mkfigs-run     = "mkfigs.run:main"
-mkfigs-pushit  = "mkfigs.pushit:main"
-mkfigs-restore = "mkfigs.restore:main"
+mkfigs-run              = "mkfigs.run:main"
+mkfigs-pushit           = "mkfigs.pushit:main"
+mkfigs-restore          = "mkfigs.restore:main"
+mkfigs-fetch-notebooks  = "mkfigs.fetch:main"
 
 [project.urls]
 bugs = "https://github.com/ACCESS-NRI/access-model-mkfigs/issues"
