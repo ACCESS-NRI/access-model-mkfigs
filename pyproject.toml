@@ -51,9 +51,10 @@ docstest = [
     ]
 
 [project.scripts]
-mkfigs-run     = "mkfigs.run:main"
-mkfigs-pushit  = "mkfigs.pushit:main"
-mkfigs-restore = "mkfigs.restore:main"
+mkfigs-run              = "mkfigs.run:main"
+mkfigs-pushit           = "mkfigs.pushit:main"
+mkfigs-restore          = "mkfigs.restore:main"
+mkfigs-fetch-notebooks  = "mkfigs.fetch:main"
 
 [project.urls]
 bugs = "https://github.com/ACCESS-NRI/access-model-mkfigs/issues"
