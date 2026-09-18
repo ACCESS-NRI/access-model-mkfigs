@@ -74,32 +74,21 @@ Full tracebacks, if the default summary isn't enough:
 pytest -v -s --tb=long tests/test_upload_parts.py
 ```
 
-A sensible order to go through file-by-file, starting with the simplest and
-most self-contained and building up:
+A sensible order to go through file-by-file, starting with the simplest
+and most self-contained and building up — and whether it's worth
+inspecting the actual files each one creates afterwards (some are pure
+in-memory functions with nothing on disk to look at once the test
+finishes; see `--basetemp` below for how to browse the ones that do):
 
-```bash
-pytest -v -s tests/test_configdoc_unit.py
-pytest -v -s tests/test_upload_parts.py
-pytest -v -s tests/test_figshare_uploader.py
-pytest -v -s tests/test_restore.py
-pytest -v -s tests/test_run_notebook.py
-pytest -v -s tests/test_pushit_modes.py
-pytest -v -s tests/test_run.py
-```
-
-Not every file leaves behind files worth inspecting afterwards — some are
-pure in-memory functions with nothing on disk to look at once the test
-finishes:
-
-| File | Worth inspecting the files it creates? |
+| Run | Worth inspecting the files it creates? |
 |---|---|
-| `test_configdoc_unit.py` | No |
-| `test_upload_parts.py` | No — watch it with `-s` instead |
-| `test_run.py` | No |
-| `test_figshare_uploader.py` | Yes — rewritten markdown with real (fake) Figshare URLs, a `figshare_manifest.json` |
-| `test_restore.py` | Yes — a whole fake repo tree with downloaded notebooks and copied `.md` files |
-| `test_run_notebook.py` | Yes — `mkfigs_run.log`/`mkfigs_errors.log`, plus the CLI's own "next steps" instructions via `-s` |
-| `test_pushit_modes.py` | Yes, the most — a full fake paper-repo tree: docs markdown, `notebooks_urls.json`, an updated `mkdocs.yml`, copied-back notebooks |
+| `pytest -v -s tests/test_configdoc_unit.py` | No |
+| `pytest -v -s tests/test_upload_parts.py` | No — watch it with `-s` instead |
+| `pytest -v -s tests/test_run.py` | No |
+| `pytest -v -s tests/test_figshare_uploader.py` | Yes — rewritten markdown with real (fake) Figshare URLs, a `figshare_manifest.json` |
+| `pytest -v -s tests/test_restore.py` | Yes — a whole fake repo tree with downloaded notebooks and copied `.md` files |
+| `pytest -v -s tests/test_run_notebook.py` | Yes — `mkfigs_run.log`/`mkfigs_errors.log`, plus the CLI's own "next steps" instructions via `-s` |
+| `pytest -v -s tests/test_pushit_modes.py` | Yes, the most — a full fake paper-repo tree: docs markdown, `notebooks_urls.json`, an updated `mkdocs.yml`, copied-back notebooks |
 
 To actually browse what one of these produces, point `--basetemp` at a
 fixed location for the whole file rather than a single test — each test
