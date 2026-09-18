@@ -1,6 +1,7 @@
 # access-model-mkfigs
 
 [![CI](https://github.com/ACCESS-NRI/access-model-mkfigs/actions/workflows/ci.yml/badge.svg)](https://github.com/ACCESS-NRI/access-model-mkfigs/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/ACCESS-NRI/access-model-mkfigs/branch/master/graph/badge.svg)](https://codecov.io/gh/ACCESS-NRI/access-model-mkfigs)
 
 Evaluation figure workflow tools for ACCESS model paper repositories.
 
