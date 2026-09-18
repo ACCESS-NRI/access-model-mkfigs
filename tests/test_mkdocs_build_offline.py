@@ -31,12 +31,26 @@ import pytest
 FIXTURE_SITE = Path(__file__).parent / "fixtures" / "minimal_site"
 
 
-def _mkdocs_available() -> bool:
+def _mkdocs_stack_available() -> bool:
+    """True only if every package the fixture site's mkdocs.yml actually
+    needs is importable in *this* interpreter: core mkdocs, the material
+    theme, and the mkdocs-jupyter plugin.
+
+    Checking for bare `mkdocs` alone isn't enough -- an environment can
+    have mkdocs itself installed (e.g. for building real docs elsewhere)
+    without the specific theme/plugin this fixture site declares. That
+    showed up in practice as a hard failure ("Config value 'plugins': The
+    'mkdocs-jupyter' plugin is not installed") instead of a clean skip,
+    in an env that had mkdocs + mkdocs-material but not mkdocs-jupyter.
+    """
     import importlib.util
-    return importlib.util.find_spec("mkdocs") is not None
+    return all(
+        importlib.util.find_spec(mod) is not None
+        for mod in ("mkdocs", "mkdocs_jupyter", "material")
+    )
 
 
-@pytest.mark.skipif(not _mkdocs_available(), reason="mkdocs not installed in this environment")
+@pytest.mark.skipif(not _mkdocs_stack_available(), reason="mkdocs/mkdocs-material/mkdocs-jupyter not all installed in this environment")
 def test_minimal_fixture_site_builds_cleanly(tmp_path):
     site_dir = tmp_path / "site"
     result = subprocess.run(
@@ -54,7 +68,6 @@ def test_minimal_fixture_site_builds_cleanly(tmp_path):
     assert nb_pages, "expected mkdocs-jupyter to render SST.ipynb into an HTML page"
 
 
-@pytest.mark.skipif(not _mkdocs_available(), reason="mkdocs not installed in this environment")
 def test_fixture_site_nav_matches_pushit_generated_shape(tmp_path):
     """Sanity-check that fixtures/minimal_site's nav: block has the exact
     shape update_mkdocs_nav() actually generates (Summary + Notebook
@@ -62,6 +75,11 @@ def test_fixture_site_nav_matches_pushit_generated_shape(tmp_path):
     quietly drift away from what pushit.py really produces. If pushit.py's
     nav shape ever changes, update fixtures/minimal_site/mkdocs.yml to match
     and this assertion will catch the mismatch.
+
+    Unlike the test above, this one only parses YAML (via the project's
+    own pyyaml dependency) -- it never needs mkdocs/material/mkdocs-jupyter
+    installed at all, so it always runs rather than sharing the skip
+    condition above.
     """
     import yaml
     data = yaml.safe_load((FIXTURE_SITE / "mkdocs.yml").read_text())

@@ -7,10 +7,11 @@ pip install -e ".[dev]"
 pytest
 ```
 
-You should see `52 passed, 2 skipped` (or `50 passed, 4 skipped` if you
-haven't installed the `docstest` extra below — the extra 2 skips are
-`test_mkdocs_build_offline.py`'s two tests, which skip themselves cleanly
-rather than fail when `mkdocs` isn't installed).
+You should see `52 passed, 2 skipped` (or `51 passed, 3 skipped` if you
+haven't installed the `docstest` extra below — the extra skip is
+`test_mkdocs_build_offline.py::test_minimal_fixture_site_builds_cleanly`,
+which skips itself cleanly rather than fail when the full `mkdocs` +
+`mkdocs-material` + `mkdocs-jupyter` stack isn't all present).
 
 ## How it's organised
 
