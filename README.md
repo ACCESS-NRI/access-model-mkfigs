@@ -61,3 +61,7 @@ coverage run --source=mkfigs -m pytest
 coverage report -m
 ```
 
+See [`tests/README.md`](tests/README.md) for a detailed walkthrough — running
+individual tests, the layered structure, and the optional `docstest`/live
+Figshare layers.
+
