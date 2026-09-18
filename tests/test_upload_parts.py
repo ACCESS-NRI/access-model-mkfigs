@@ -18,18 +18,21 @@ from mkfigs.configdoc import FigshareUploader
 
 
 def _uploader(tmp_path: Path) -> FigshareUploader:
+    """Build a bare FigshareUploader; these tests monkeypatch requests.put directly, no HTTP."""
     mdfol = tmp_path / "mkmd"
     mdfol.mkdir(exist_ok=True)
     return FigshareUploader(token="tok", experiment="exp", mdfol=str(mdfol))
 
 
 def _ok_response():
+    """A stand-in requests.Response whose .raise_for_status() never raises."""
     r = MagicMock()
     r.raise_for_status.return_value = None
     return r
 
 
 def test_upload_parts_skips_parts_already_marked_complete(tmp_path, monkeypatch):
+    """Only the still-PENDING part should be re-uploaded; an already-COMPLETE part must not be."""
     up = _uploader(tmp_path)
     fpath = tmp_path / "big.bin"
     fpath.write_bytes(b"0123456789")
@@ -53,6 +56,7 @@ def test_upload_parts_skips_parts_already_marked_complete(tmp_path, monkeypatch)
 
 
 def test_upload_parts_retries_transient_failure_then_succeeds(tmp_path, monkeypatch):
+    """A single transient PUT failure should be retried and succeed on the second attempt."""
     up = _uploader(tmp_path)
     fpath = tmp_path / "small.bin"
     fpath.write_bytes(b"abcde")
@@ -101,6 +105,7 @@ def test_upload_parts_treats_dropped_connection_as_success_if_figshare_confirms_
 
 
 def test_upload_parts_exhausts_retries_and_raises(tmp_path, monkeypatch):
+    """Exhausting max_attempts should raise the underlying error, not loop forever or swallow it."""
     up = _uploader(tmp_path)
     fpath = tmp_path / "small.bin"
     fpath.write_bytes(b"abcde")

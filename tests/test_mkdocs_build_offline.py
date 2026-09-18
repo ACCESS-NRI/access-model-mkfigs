@@ -12,13 +12,6 @@ pushit.py actually produces one (an experiment folder with a per-notebook
 summary .md + a notebooks/<nb>.ipynb, wired into mkdocs.yml's nav, with
 the mkdocs-jupyter plugin enabled) actually build into HTML with the same
 core theme/plugin combination the real sites use?
-
-A slower, separate CI job (not this suite) should periodically build the
-*real* access-om3-paper-1 checkout -- see PLAN.md's "layer 4" -- to catch
-drift between this engine and that repo's actual mkdocs.yml/theme. That
-one belongs to access-om3-paper-1's own CI (or a nightly cross-repo job),
-not here, since access-model-mkfigs shouldn't need a live clone of every
-paper repo it might ever be vendored into just to run its own tests.
 """
 from __future__ import annotations
 
@@ -52,6 +45,7 @@ def _mkdocs_stack_available() -> bool:
 
 @pytest.mark.skipif(not _mkdocs_stack_available(), reason="mkdocs/mkdocs-material/mkdocs-jupyter not all installed in this environment")
 def test_minimal_fixture_site_builds_cleanly(tmp_path):
+    """The fixture site should build cleanly, including a rendered HTML page for the notebook."""
     site_dir = tmp_path / "site"
     result = subprocess.run(
         [sys.executable, "-m", "mkdocs", "build", "--strict", "-d", str(site_dir)],

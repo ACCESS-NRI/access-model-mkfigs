@@ -37,6 +37,7 @@ def _seed_notebook_outputs(repo: Path, ename: str, notebooks: list[str]):
 
 
 def _run_pushit(args, no_subprocess=True):
+    """Invoke pushit.main() with a fake argv, stubbing subprocess.run by default."""
     with patch.object(sys, "argv", ["mkfigs-pushit", *args]):
         if no_subprocess:
             with patch.object(pushit.subprocess, "run") as mock_run:
@@ -50,6 +51,7 @@ def _run_pushit(args, no_subprocess=True):
 # ---------------------------------------------------------------------------
 
 def test_dry_run_writes_nothing_and_never_calls_figshare(patch_repo_paths, fake_figshare):
+    """--dry-run should leave everything untouched and never touch Figshare."""
     repo = patch_repo_paths
     _seed_notebook_outputs(repo, "test_experiment_01", ["SST", "MLD"])
 
@@ -73,6 +75,7 @@ def test_dry_run_writes_nothing_and_never_calls_figshare(patch_repo_paths, fake_
 # ---------------------------------------------------------------------------
 
 def test_skip_figshare_copies_docs_but_uploads_nothing(patch_repo_paths, fake_figshare, figshare_token):
+    """--skip-figshare should copy docs but never create a Figshare article."""
     repo = patch_repo_paths
     _seed_notebook_outputs(repo, "test_experiment_01", ["SST"])
 
@@ -90,6 +93,7 @@ def test_skip_figshare_copies_docs_but_uploads_nothing(patch_repo_paths, fake_fi
 # ---------------------------------------------------------------------------
 
 def test_full_run_uploads_and_builds_docs_tree(patch_repo_paths, fake_figshare, figshare_token):
+    """The full happy path end to end: upload, docs tree, nav, index.md."""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     _seed_notebook_outputs(repo, ename, ["SST", "MLD"])
@@ -209,6 +213,7 @@ def test_mkdocs_jupyter_plugin_addition_is_not_actually_persisted(
 def test_check_figshare_integrity_passes_when_everything_matches(
     patch_repo_paths, fake_figshare, figshare_token, capsys
 ):
+    """Everything present and matching should be reported as safe to publish."""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     ofol, mdfol = _seed_notebook_outputs(repo, ename, ["SST", "MLD"])
@@ -230,6 +235,7 @@ def test_check_figshare_integrity_passes_when_everything_matches(
 def test_check_figshare_integrity_exits_nonzero_on_missing_file(
     patch_repo_paths, fake_figshare, figshare_token
 ):
+    """A missing expected file should exit non-zero, not pass as safe to publish."""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     ofol, mdfol = _seed_notebook_outputs(repo, ename, ["SST"])
@@ -248,6 +254,7 @@ def test_check_figshare_integrity_exits_nonzero_on_missing_file(
 def test_check_figshare_integrity_flags_but_does_not_autodelete_duplicates_without_flag(
     patch_repo_paths, fake_figshare, figshare_token, capsys
 ):
+    """Duplicates are reported, not deleted, unless --fix-duplicates is passed."""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     ofol, mdfol = _seed_notebook_outputs(repo, ename, ["SST"])
@@ -279,6 +286,7 @@ def test_check_figshare_integrity_flags_but_does_not_autodelete_duplicates_witho
 # ---------------------------------------------------------------------------
 
 def test_check_figshare_upload_fails_when_url_not_yet_public(patch_repo_paths, figshare_token):
+    """An unreachable (unpublished) URL should exit non-zero."""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     exp_docs = repo / "documentation" / "docs" / "pages" / "experiments" / ename
@@ -301,6 +309,7 @@ def test_check_figshare_upload_fails_when_url_not_yet_public(patch_repo_paths, f
 def test_check_figshare_upload_succeeds_and_prints_git_commands(
     patch_repo_paths, figshare_token, capsys
 ):
+    """A reachable URL should print the actual git commit/tag commands to run."""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     ofol = repo / "notebooks" / f"mkfigs_output_{ename}"

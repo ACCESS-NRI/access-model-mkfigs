@@ -21,8 +21,7 @@ Run manually with:
     pytest tests/live/ -v
 
 Do NOT wire this into the per-PR CI job. A nightly/manually-triggered
-workflow is the right place for it, if it's wired into CI at all -- see
-PLAN.md.
+workflow is the right place for it, if it's wired into CI at all.
 """
 from __future__ import annotations
 
@@ -34,6 +33,7 @@ from mkfigs.configdoc import FigshareUploader
 def test_upload_a_real_private_article_and_verify_then_delete_it(
     tmp_path, live_token, cleanup_private_articles
 ):
+    """Upload to a new private article, verify via the private-state API, then delete it."""
     mdfol = tmp_path / "mkmd"
     mdfol.mkdir()
     png = mdfol / "LIVE_SMOKE_TEST_01.png"

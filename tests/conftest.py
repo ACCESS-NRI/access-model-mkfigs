@@ -326,7 +326,7 @@ def patch_repo_paths(monkeypatch, fake_paper_repo: Path):
     tmp_path). This fixture patches those four names directly instead,
     which is the only reliable way to redirect pushit.py at a fake repo
     today. Recommend hoisting this resolution into a function called from
-    main() instead of a module-level side effect -- see PLAN.md.
+    main() instead of a module-level side effect.
     """
     from mkfigs import pushit
 

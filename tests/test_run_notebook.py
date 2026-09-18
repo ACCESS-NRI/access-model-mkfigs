@@ -18,6 +18,7 @@ from mkfigs import run as run_mod
 
 
 def _write_notebook(path: Path, kernel_name="conda-env-analysis3-25.07-py"):
+    """Write a minimal notebook with the given kernelspec."""
     path.write_text(json.dumps({
         "cells": [],
         "metadata": {"kernelspec": {"display_name": kernel_name, "name": kernel_name}},
@@ -26,6 +27,7 @@ def _write_notebook(path: Path, kernel_name="conda-env-analysis3-25.07-py"):
 
 
 def test_run_notebook_invokes_papermill_with_expected_args_and_cleans_up_kernel_copy(tmp_path):
+    """papermill then nbconvert should be invoked correctly, with no leftover kernel copy."""
     notebooks_dir = tmp_path / "notebooks"
     notebooks_dir.mkdir()
     ofol = notebooks_dir / "mkfigs_output_exp1"
@@ -54,6 +56,7 @@ def test_run_notebook_invokes_papermill_with_expected_args_and_cleans_up_kernel_
 
 
 def test_run_notebook_returns_false_on_papermill_failure_but_still_runs_nbconvert(tmp_path):
+    """A papermill failure should return False but still run nbconvert."""
     notebooks_dir = tmp_path / "notebooks"
     notebooks_dir.mkdir()
     ofol = notebooks_dir / "mkfigs_output_exp1"
@@ -69,6 +72,7 @@ def test_run_notebook_returns_false_on_papermill_failure_but_still_runs_nbconver
 
 
 def test_run_notebook_cleans_up_kernel_copy_even_if_papermill_raises(tmp_path):
+    """A raised exception should still clean up the kernel copy and propagate."""
     notebooks_dir = tmp_path / "notebooks"
     notebooks_dir.mkdir()
     ofol = notebooks_dir / "mkfigs_output_exp1"
@@ -87,6 +91,7 @@ def test_run_notebook_cleans_up_kernel_copy_even_if_papermill_raises(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_extract_notebook_error_strips_ansi_and_finds_last_error(tmp_path):
+    """The last error cell should win, with ANSI codes stripped."""
     nb = {
         "cells": [
             {"outputs": [{"output_type": "error", "ename": "ValueError",
@@ -105,6 +110,7 @@ def test_extract_notebook_error_strips_ansi_and_finds_last_error(tmp_path):
 
 
 def test_extract_notebook_error_returns_none_when_no_error_or_missing_file(tmp_path):
+    """No error, or a missing file, should return None rather than raise."""
     ok_nb = {"cells": [{"outputs": [{"output_type": "stream", "text": "hi"}]}]}
     p = tmp_path / "rendered.ipynb"
     p.write_text(json.dumps(ok_nb))
@@ -117,6 +123,7 @@ def test_extract_notebook_error_returns_none_when_no_error_or_missing_file(tmp_p
 # ---------------------------------------------------------------------------
 
 def test_main_writes_error_log_for_failed_notebooks(tmp_path, monkeypatch):
+    """Only the failed notebook should appear in mkfigs_errors.log."""
     wfolder = tmp_path / "paper-repo"
     notebooks_dir = wfolder / "notebooks"
     notebooks_dir.mkdir(parents=True)
@@ -153,6 +160,7 @@ def test_main_writes_error_log_for_failed_notebooks(tmp_path, monkeypatch):
 
 
 def test_main_exits_if_mkfigs_notebooks_env_var_missing(tmp_path, monkeypatch):
+    """A missing MKFIGS_NOTEBOOKS env var should exit."""
     wfolder = tmp_path / "paper-repo"
     (wfolder / "notebooks").mkdir(parents=True)
     monkeypatch.delenv("MKFIGS_NOTEBOOKS", raising=False)

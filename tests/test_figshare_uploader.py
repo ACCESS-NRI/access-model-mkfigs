@@ -1,7 +1,7 @@
 """Tests for mkfigs.configdoc.FigshareUploader, entirely against
 FakeFigshareServer (see conftest.py) -- no real network, no real account,
 nothing ever published. This is the "test the upload path" half of
-Figshare support's recommended split (see PLAN.md); the mirror-image
+Figshare support's recommended split; the mirror-image
 "mock the restore/download path" half lives in test_restore.py.
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ from .conftest import make_png
 
 
 def _uploader(tmp_path: Path, token="tok") -> FigshareUploader:
+    """Build a FigshareUploader against the fake_figshare fixture."""
     mdfol = tmp_path / "mkmd"
     mdfol.mkdir(exist_ok=True)
     return FigshareUploader(token=token, experiment="test_experiment_01", mdfol=str(mdfol))
@@ -25,6 +26,7 @@ def _uploader(tmp_path: Path, token="tok") -> FigshareUploader:
 # ---------------------------------------------------------------------------
 
 def test_get_or_create_article_creates_once_and_caches_in_manifest(fake_figshare, tmp_path):
+    """A second call should reuse the on-disk manifest entry, not create a duplicate article."""
     up = _uploader(tmp_path)
     aid1 = up._get_or_create_article()
     aid2 = up._get_or_create_article()  # second call: manifest fast-path
@@ -35,6 +37,7 @@ def test_get_or_create_article_creates_once_and_caches_in_manifest(fake_figshare
 
 
 def test_get_or_create_article_finds_existing_by_title_search(fake_figshare, tmp_path):
+    """An existing article found by title search should be reused, not duplicated."""
     up = _uploader(tmp_path)
     existing_id = fake_figshare.seed_article(up.article_title)
 
@@ -69,6 +72,7 @@ def test_get_or_create_article_falls_back_to_pagination_when_search_misses(
 # ---------------------------------------------------------------------------
 
 def test_upload_pngs_for_notebook_uploads_and_records_manifest(fake_figshare, tmp_path):
+    """Only PNGs belonging to the given notebook should be uploaded, not others in the same folder."""
     up = _uploader(tmp_path)
     mdfol = Path(up.mdfol)
     make_png(mdfol / "SST_01.png")
@@ -83,6 +87,7 @@ def test_upload_pngs_for_notebook_uploads_and_records_manifest(fake_figshare, tm
 
 
 def test_upload_file_reuses_identical_remote_file_without_reuploading(fake_figshare, tmp_path):
+    """A remote file with matching content should be reused, not re-uploaded."""
     up = _uploader(tmp_path)
     article_id = up._get_or_create_article()
     fpath = tmp_path / "SST_01.png"
@@ -98,6 +103,7 @@ def test_upload_file_reuses_identical_remote_file_without_reuploading(fake_figsh
 
 
 def test_upload_file_replaces_remote_file_when_content_differs(fake_figshare, tmp_path):
+    """A stale remote file (MD5 mismatch) should be deleted and replaced, not left or duplicated."""
     up = _uploader(tmp_path)
     article_id = up._get_or_create_article()
     fpath = tmp_path / "SST_01.png"
@@ -113,6 +119,7 @@ def test_upload_file_replaces_remote_file_when_content_differs(fake_figshare, tm
 
 
 def test_find_remote_file_cleans_up_broken_stub_alongside_working_copy(fake_figshare, tmp_path):
+    """A broken stub alongside a working copy should be cleaned up automatically."""
     up = _uploader(tmp_path)
     article_id = up._get_or_create_article()
     good_id = fake_figshare.seed_file(article_id, "SST_01.png", b"content", status="available")
@@ -129,6 +136,7 @@ def test_find_remote_file_cleans_up_broken_stub_alongside_working_copy(fake_figs
 # ---------------------------------------------------------------------------
 
 def test_rewrite_markdown_replaces_local_asset_path_on_first_run(fake_figshare, tmp_path):
+    """The local asset path in the markdown should be replaced with the real Figshare URL."""
     up = _uploader(tmp_path)
     mdfol = Path(up.mdfol)
     (mdfol / "SST.md").write_text(
@@ -178,6 +186,7 @@ def test_rewrite_markdown_replaces_previous_url_on_second_run(fake_figshare, tmp
 # ---------------------------------------------------------------------------
 
 def test_validate_and_refresh_notebook_urls_refreshes_stale_entry(fake_figshare, tmp_path):
+    """A stale URL entry should be refreshed to point at its replacement file."""
     up = _uploader(tmp_path)
     article_id = up._get_or_create_article()
     old_id = fake_figshare.seed_file(article_id, "SST_rendered.ipynb", b"v1", status="available")
@@ -210,6 +219,7 @@ def test_validate_and_refresh_notebook_urls_leaves_entry_as_is_when_no_replaceme
 
 
 def test_validate_and_refresh_notebook_urls_noop_when_empty():
+    """An empty map should short-circuit with no HTTP calls."""
     up_stub = object.__new__(FigshareUploader)  # no HTTP should happen at all
     result = FigshareUploader.validate_and_refresh_notebook_urls(up_stub, 1, {})
     assert result == {}

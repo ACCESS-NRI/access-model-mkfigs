@@ -42,6 +42,7 @@ def pushed_experiment(tmp_path: Path):
 
 
 def _run_restore(args, cwd):
+    """Run restore.main() with a fake argv from a given working directory."""
     with patch.object(sys, "argv", ["mkfigs-restore", *args]):
         old_cwd = Path.cwd()
         import os
@@ -53,6 +54,7 @@ def _run_restore(args, cwd):
 
 
 def test_restore_downloads_each_notebook_url_and_copies_markdown(pushed_experiment, monkeypatch):
+    """Every real notebook URL should be downloaded and its markdown copied in."""
     notebooks_dir = pushed_experiment / "notebooks"
     downloaded = []
 
@@ -77,6 +79,7 @@ def test_restore_downloads_each_notebook_url_and_copies_markdown(pushed_experime
 
 
 def test_restore_skips_already_present_files_without_force(pushed_experiment, monkeypatch):
+    """An already-present notebook should be skipped unless --force is passed."""
     notebooks_dir = pushed_experiment / "notebooks"
     ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
     ofol.mkdir(parents=True)
@@ -96,6 +99,7 @@ def test_restore_skips_already_present_files_without_force(pushed_experiment, mo
 
 
 def test_restore_force_redownloads_even_when_present(pushed_experiment, monkeypatch):
+    """--force should re-download and overwrite an existing notebook."""
     notebooks_dir = pushed_experiment / "notebooks"
     ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
     ofol.mkdir(parents=True)
@@ -114,6 +118,7 @@ def test_restore_force_redownloads_even_when_present(pushed_experiment, monkeypa
 
 
 def test_restore_exits_if_no_urls_json(tmp_path, monkeypatch):
+    """A missing notebooks_urls.json should exit rather than do nothing."""
     repo = tmp_path / "paper-repo"
     notebooks = repo / "notebooks"
     notebooks.mkdir(parents=True)

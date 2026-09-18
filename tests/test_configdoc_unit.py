@@ -14,6 +14,7 @@ from mkfigs.pushit import _classify_duplicates
 
 
 def test_md5_matches_hashlib(tmp_path: Path):
+    """_md5 should match hashlib.md5 directly."""
     p = tmp_path / "f.bin"
     p.write_bytes(b"hello world")
     import hashlib
@@ -37,11 +38,13 @@ def test_assign_pngs_prefix_collision_resolved_longest_first(tmp_path: Path):
 
 
 def test_assign_pngs_missing_dir_returns_empty_map_not_error(tmp_path: Path):
+    """A missing directory should return an empty list, not raise."""
     owned = assign_pngs_to_notebooks(tmp_path / "does-not-exist", ["SST"])
     assert owned == {"SST": []}
 
 
 def test_assign_pngs_ignores_non_png_files(tmp_path: Path):
+    """Only .png files should be picked up, not other file types."""
     (tmp_path / "SST_01.png").touch()
     (tmp_path / "SST_notes.txt").touch()
     owned = assign_pngs_to_notebooks(tmp_path, ["SST"])
@@ -56,14 +59,17 @@ def test_assign_pngs_ignores_non_png_files(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def _entry(id, status="available", md5="abc123"):
+    """Build a minimal fake Figshare file-listing entry."""
     return {"id": id, "status": status, "computed_md5": md5 if status == "available" else ""}
 
 
 def test_classify_duplicates_single_entry_is_a_noop():
+    """A single entry should never be treated as a duplicate."""
     assert _classify_duplicates([_entry(1)], "abc123") == (None, [], "")
 
 
 def test_classify_duplicates_stub_alongside_working_copy():
+    """A broken stub alongside a working copy should be flagged for deletion."""
     entries = [_entry(1, status="available"), _entry(2, status="created", md5="")]
     action, ids, note = _classify_duplicates(entries, "abc123")
     assert action == "delete_stubs"
@@ -71,6 +77,7 @@ def test_classify_duplicates_stub_alongside_working_copy():
 
 
 def test_classify_duplicates_identical_complete_copies_matching_local_keeps_newest():
+    """Matching duplicates should keep only the newest file id."""
     entries = [_entry(10), _entry(20), _entry(15)]
     action, ids, note = _classify_duplicates(entries, "abc123")
     assert action == "delete_older_dupes"
@@ -78,6 +85,7 @@ def test_classify_duplicates_identical_complete_copies_matching_local_keeps_newe
 
 
 def test_classify_duplicates_identical_copies_but_stale_vs_local():
+    """Duplicates that don't match local should be reported as stale, not deleted."""
     entries = [_entry(1, md5="deadbeef"), _entry(2, md5="deadbeef")]
     action, ids, note = _classify_duplicates(entries, "abc123")
     assert action == "stale_duplicates"
@@ -85,6 +93,7 @@ def test_classify_duplicates_identical_copies_but_stale_vs_local():
 
 
 def test_classify_duplicates_conflicting_complete_copies():
+    """Conflicting duplicates should be reported, not auto-resolved."""
     entries = [_entry(1, md5="aaa"), _entry(2, md5="bbb")]
     action, ids, note = _classify_duplicates(entries, "abc123")
     assert action == "conflicting"

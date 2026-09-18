@@ -23,15 +23,15 @@ to unpublish or delete a published article — see the comments in
 
 | File | Covers |
 |---|---|
-| `test_configdoc_unit.py` | Pure functions — `_md5`, `assign_pngs_to_notebooks`, `_classify_duplicates` — no mocking at all |
-| `test_upload_parts.py` | The concurrent part-upload retry/resume logic, mocked at the `requests.put` level |
-| `test_figshare_uploader.py` | `FigshareUploader` against `conftest.py`'s in-memory fake Figshare server |
-| `test_restore.py` | `restore.py` against a mocked download (`urlretrieve`) |
-| `test_run_notebook.py` | `run.py`'s papermill/nbconvert orchestration, with `subprocess.run` stubbed |
-| `test_pushit_modes.py` | `pushit.main()` end to end — `--dry-run`, `--skip-figshare`, a full run, both `--check-figshare-*` modes |
-| `test_run.py` | `_fix_kernel`'s private-copy-per-PID concurrency contract (the original test, predates the rest of this suite) |
-| `test_mkdocs_build_offline.py` | Real `mkdocs build --strict` against a small fixture site — needs the `docstest` extra, see below |
-| `live/` | Opt-in, creates and deletes one real private Figshare article — never publishes, see below |
+| `test_configdoc_unit.py` | Small helper functions, tested on their own |
+| `test_upload_parts.py` | What happens if an upload to Figshare is interrupted or fails partway through, and how it picks back up |
+| `test_figshare_uploader.py` | Uploading files to Figshare — including reusing files already there, and replacing ones that changed |
+| `test_restore.py` | Downloading previously-uploaded figures and notebooks onto a fresh machine |
+| `test_run_notebook.py` | Running a notebook and handling failures |
+| `test_pushit_modes.py` | The main `pushit` command end to end — a normal run, dry runs, and the two safety-check modes |
+| `test_run.py` | A fix for a bug where running notebooks at the same time could clash with each other |
+| `test_mkdocs_build_offline.py` | Building the documentation website, to catch broken pages before they go live |
+| `live/` | The one test that talks to the real Figshare — see below |
 
 Everything except the last two runs in well under a second, needs no
 network access, and never touches a real Figshare account.
@@ -93,9 +93,9 @@ finishes:
 
 | File | Worth inspecting the files it creates? |
 |---|---|
-| `test_configdoc_unit.py` | No — pure functions (`_md5`, `assign_pngs_to_notebooks`, `_classify_duplicates`), no prints, nothing meaningful written to disk |
-| `test_upload_parts.py` | Not really — the "files" involved are trivial dummy byte strings; the retry/resume behaviour is the actual point (watch it with `-s` instead) |
-| `test_run.py` | Marginal — one small notebook JSON file, narrow in scope |
+| `test_configdoc_unit.py` | No |
+| `test_upload_parts.py` | No — watch it with `-s` instead |
+| `test_run.py` | No |
 | `test_figshare_uploader.py` | Yes — rewritten markdown with real (fake) Figshare URLs, a `figshare_manifest.json` |
 | `test_restore.py` | Yes — a whole fake repo tree with downloaded notebooks and copied `.md` files |
 | `test_run_notebook.py` | Yes — `mkfigs_run.log`/`mkfigs_errors.log`, plus the CLI's own "next steps" instructions via `-s` |
