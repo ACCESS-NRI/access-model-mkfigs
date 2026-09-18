@@ -7,11 +7,12 @@ pip install -e ".[dev]"
 pytest
 ```
 
-You should see `52 passed, 2 skipped` (or `51 passed, 3 skipped` if you
-haven't installed the `docstest` extra below — the extra skip is
-`test_mkdocs_build_offline.py::test_minimal_fixture_site_builds_cleanly`,
-which skips itself cleanly rather than fail when the full `mkdocs` +
-`mkdocs-material` + `mkdocs-jupyter` stack isn't all present).
+You should see `52 passed, 2 skipped` if this environment happens to have
+the full `mkdocs` + `mkdocs-material` + `mkdocs-jupyter` stack available
+(however it got there — see "The mkdocs build check" below), or
+`51 passed, 3 skipped` if it doesn't. Either outcome is fine — nothing to
+worry about, and no separate command needed either way; plain `pytest`
+always picks it up.
 
 ## How it's organised
 
@@ -86,6 +87,37 @@ pytest -v -s tests/test_pushit_modes.py
 pytest -v -s tests/test_run.py
 ```
 
+Not every file leaves behind files worth inspecting afterwards — some are
+pure in-memory functions with nothing on disk to look at once the test
+finishes:
+
+| File | Worth inspecting the files it creates? |
+|---|---|
+| `test_configdoc_unit.py` | No — pure functions (`_md5`, `assign_pngs_to_notebooks`, `_classify_duplicates`), no prints, nothing meaningful written to disk |
+| `test_upload_parts.py` | Not really — the "files" involved are trivial dummy byte strings; the retry/resume behaviour is the actual point (watch it with `-s` instead) |
+| `test_run.py` | Marginal — one small notebook JSON file, narrow in scope |
+| `test_figshare_uploader.py` | Yes — rewritten markdown with real (fake) Figshare URLs, a `figshare_manifest.json` |
+| `test_restore.py` | Yes — a whole fake repo tree with downloaded notebooks and copied `.md` files |
+| `test_run_notebook.py` | Yes — `mkfigs_run.log`/`mkfigs_errors.log`, plus the CLI's own "next steps" instructions via `-s` |
+| `test_pushit_modes.py` | Yes, the most — a full fake paper-repo tree: docs markdown, `notebooks_urls.json`, an updated `mkdocs.yml`, copied-back notebooks |
+
+To actually browse what one of these produces, point `--basetemp` at a
+fixed location for the whole file rather than a single test — each test
+function gets its own subfolder underneath, plus a `<test_name>_current`
+symlink that always points at its most recent run (handy since the exact
+subfolder name gets a random numeric suffix that changes between runs):
+
+```bash
+pytest -s --basetemp=/tmp/mkfigs-inspect tests/test_pushit_modes.py
+ls /tmp/mkfigs-inspect/            # find the *_current symlink you want
+find /tmp/mkfigs-inspect/<name>_current -type f
+```
+
+`--basetemp` wipes its contents at the *start* of the next run pointed at
+the same path, so look before you run again, or use a different path
+(`/tmp/mkfigs-inspect-2`, etc.) to keep more than one run's output around
+at once.
+
 ## Coverage
 
 ```bash
@@ -93,7 +125,7 @@ coverage run --source=mkfigs -m pytest
 coverage report -m
 ```
 
-## The offline mkdocs build check
+## The mkdocs build check
 
 `test_mkdocs_build_offline.py` runs a real `mkdocs build --strict` against
 `fixtures/minimal_site/` — a small fixture doc tree shaped the way
@@ -103,13 +135,20 @@ deliberately not a clone of the real `access-om3-paper-1` repo, which pulls
 in a custom theme, several other plugins, and would make this suite slow
 and fragile for reasons that have nothing to do with this repo's own bugs.
 
-Needs the `docstest` extra, kept separate from `dev` so the fast layer
-above never needs `mkdocs` installed at all:
+It skips itself automatically — no flag or special invocation needed — if
+`mkdocs`, `mkdocs-material`, and `mkdocs-jupyter` aren't all importable in
+whatever environment you're running `pytest` from, and it runs as part of
+a plain `pytest` once they are. The `docstest` extra below is just one way
+to get them there; if your environment already has them for some other
+reason (e.g. you also use it for real docs work), this test runs
+automatically without you doing anything further:
 
 ```bash
 pip install -e ".[dev,docstest]"
-pytest tests/test_mkdocs_build_offline.py
+pytest
 ```
+
+(or `pytest tests/test_mkdocs_build_offline.py` to run just this file)
 
 ## The opt-in live Figshare test
 
