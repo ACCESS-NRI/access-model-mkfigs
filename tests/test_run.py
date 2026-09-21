@@ -36,12 +36,14 @@ NOTEBOOK = {
 
 @pytest.fixture
 def nb_path(tmp_path):
+    """Write the shared notebook template _fix_kernel is tested against."""
     p = tmp_path / "Example.ipynb"
     p.write_text(json.dumps(NOTEBOOK))
     return p
 
 
 def test_fix_kernel_normalises_kernelspec_in_a_private_copy(nb_path):
+    """The kernelspec should be normalised in a private copy, leaving the original untouched."""
     original_bytes = nb_path.read_bytes()
 
     fixed = _fix_kernel(nb_path)
