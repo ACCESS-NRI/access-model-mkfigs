@@ -24,7 +24,8 @@ import re
 from pathlib import Path
 
 import pytest
-import responses
+import requests
+
 
 FIGSHARE_BASE = "https://api.figshare.com/v2"
 

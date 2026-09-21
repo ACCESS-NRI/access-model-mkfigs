@@ -30,26 +30,30 @@ import hashlib
 from mkfigs.configdoc import FigshareUploader
 
 
-def test_upload_a_real_private_article_and_verify_then_delete_it(
-    tmp_path, live_token, cleanup_private_articles
+def test_upload_a_real_private_file_and_verify_computed_md5(
+    tmp_path,
+    live_token,
+    live_article_identity,
+    create_private_article,
 ):
-    """Upload to a new private article, verify via the private-state API, then delete it."""
+    """
+    Upload one file and verify figshare computed its md5 correctly.
+    """
     mdfol = tmp_path / "mkmd"
     mdfol.mkdir()
+
     png = mdfol / "LIVE_SMOKE_TEST_01.png"
     payload = b"mkfigs live smoke test fixture -- safe to ignore/delete"
     png.write_bytes(payload)
 
     uploader = FigshareUploader(
         token=live_token,
-        experiment="mkfigs-ci-live-smoke-test",  # unmistakable, never a real experiment name
+        experiment=live_article_identity["experiment"],
         mdfol=str(mdfol),
-        article_title="[mkfigs CI live smoke test -- safe to delete]",
+        article_title=live_article_identity["title"],
     )
 
-    article_id = uploader._get_or_create_article()
-    cleanup_private_articles.append(article_id)  # registered for teardown BEFORE any upload
-
+    article_id = create_private_article(uploader)
     url = uploader.upload(str(png))
 
     assert url is not None
@@ -59,7 +63,7 @@ def test_upload_a_real_private_article_and_verify_then_delete_it(
     # nothing to fetch publicly since this article is never published.
     remote_files = uploader._list_remote_files(article_id)
     matching = [f for f in remote_files if f.get("name") == "LIVE_SMOKE_TEST_01.png"]
-    assert matching, "uploaded file not found on the article"
+    assert len(matching) == 1
     assert matching[0].get("computed_md5") == hashlib.md5(payload).hexdigest()
 
     # Explicit safety assertion: this test must never have published anything.
@@ -68,8 +72,11 @@ def test_upload_a_real_private_article_and_verify_then_delete_it(
     # not by an unrecoverable production article.)
 
 
-def test_reupload_of_identical_content_reuses_rather_than_duplicates(
-    tmp_path, live_token, cleanup_private_articles
+def test_reupload_of_identical_content_reuses_remote_file(
+    tmp_path,
+    live_token,
+    live_article_identity,
+    create_private_article,
 ):
     """Same file uploaded twice against the same (private) article should
     reuse the existing remote entry, not create a second one -- this is
@@ -80,20 +87,22 @@ def test_reupload_of_identical_content_reuses_rather_than_duplicates(
     """
     mdfol = tmp_path / "mkmd"
     mdfol.mkdir()
+
     png = mdfol / "LIVE_SMOKE_TEST_02.png"
     png.write_bytes(b"same content, uploaded twice")
 
     uploader = FigshareUploader(
         token=live_token,
-        experiment="mkfigs-ci-live-smoke-test-2",
+        experiment=live_article_identity["experiment"],
         mdfol=str(mdfol),
-        article_title="[mkfigs CI live smoke test 2 -- safe to delete]",
+        article_title=live_article_identity["title"],
     )
-    article_id = uploader._get_or_create_article()
-    cleanup_private_articles.append(article_id)
+    article_id = create_private_article(uploader)
 
-    uploader.upload(str(png))
-    uploader.upload(str(png))  # second call, identical content
+    first_url = uploader.upload(str(png))
+    second_url = uploader.upload(str(png))
+
+    assert second_url == first_url
 
     remote_files = uploader._list_remote_files(article_id)
     matches = [f for f in remote_files if f.get("name") == "LIVE_SMOKE_TEST_02.png"]

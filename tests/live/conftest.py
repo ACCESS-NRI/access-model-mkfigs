@@ -23,26 +23,55 @@ cleaned up automatically, it should not exist.
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
+import requests
+
+
+LIVE_TEST_ENV = "MKFIGS_LIVE_FIGSHARE_TESTS"
 
 
 def _live_tests_enabled() -> bool:
-    if os.environ.get("MKFIGS_LIVE_FIGSHARE_TESTS") != "1":
+    """
+    Return True only when live tests are explicitly enabled and a token exists
+    """
+    if os.environ.get(LIVE_TEST_ENV) != "1":
         return False
     from mkfigs.pushit import resolve_figshare_token
     return bool(resolve_figshare_token())
 
 
-pytestmark = pytest.mark.skipif(
-    not _live_tests_enabled(),
-    reason="live Figshare tests are opt-in: set MKFIGS_LIVE_FIGSHARE_TESTS=1 "
-           "and a real FIGSHARE_TOKEN to run them",
-)
+@pytest.fixture(autouse=True)
+def _require_explicit_live_figshare_opt_in(monkeypatch):
+    """
+    Skip every test in tests/live unless real-network access was opted into explicitly.
+    """
+    if not _live_tests_enabled():
+        pytest.skip(
+            "live Figshare tests are opt-in: set MKFIGS_LIVE_FIGSHARE_TESTS=1 "
+            "and provide a real FIGSHARE_TOKEN to run them"
+        )
+
+    from mkfigs import configdoc
+
+    real_figshare_request = configdoc._figshare_request
+
+    def guarded_figshare_request(method, url, *args, **kwargs):
+        if url.rstrip("/").endswith("/publish"):
+            pytest.fail(
+                "live figshare tests must never publish an article"
+            )
+        return real_figshare_request(method, url, *args, **kwargs)
+
+    monkeypatch.setattr(configdoc, "_figshare_request", guarded_figshare_request)
 
 
 @pytest.fixture
 def live_token() -> str:
+    """
+    Return the real figshare token after the live-test gate have passed.
+    """
     from mkfigs.pushit import resolve_figshare_token
     token = resolve_figshare_token()
     if not token:
@@ -51,24 +80,65 @@ def live_token() -> str:
 
 
 @pytest.fixture
-def cleanup_private_articles(live_token):
-    """Yield a list; any article id appended to it is DELETE'd on teardown.
-
-    Only ever call this with a PRIVATE (unpublished) article id -- per
-    Figshare support, DELETE on a public/published article returns 403/405
-    and is not something this fixture (or anything in this repo) should
-    ever attempt to work around.
+def live_article_identity() -> dict[str, str]:
     """
-    import requests
+    Return a unique experiment/title pair for one live test.
+
+    Static titles are unsafe because a previous crashed test may have left 
+    a private article behind. A later test could then accidentally reuse
+    that old article through _get_or_create_article().
+    """
+    run_id = uuid.uuid4().hex[:12]
+    return {
+        "experiment": f"live-test-{run_id}",
+        "title": f"Live test article {run_id} -- safe to delete",
+    }
+
+
+@pytest.fixture
+def create_private_article(live_token):
+    """
+    Create private figshare articles and clean them up afterwards.
+
+    article_id = create_private_article(uploader)
+
+    rather than calling _get_or_create_article() and then separately
+    remembering to register the resulting ID.
+
+    Cleanup attempts every registered article even if an earlier deletion fails,
+    then fails the test during teardown if anything could not be removed.
+    """
     created: list[int] = []
-    yield created
+
+    def create(uploader) -> int:
+        article_id = uploader._get_or_create_article()
+        created.append(article_id)
+        return article_id
+    yield create
+
+    cleanup_failures: list[tuple[int, Exception]] = []
+
     for article_id in created:
         try:
-            requests.delete(
+            response = requests.delete(
                 f"https://api.figshare.com/v2/account/articles/{article_id}",
                 headers={"Authorization": f"token {live_token}"},
-                timeout=30,
+                timeout=(10, 30),
             )
+
+            if response.status_code == 404:
+                # A missing article is not a failure
+                continue
+            response.raise_for_status()
         except Exception as exc:  # pragma: no cover -- best-effort cleanup
-            print(f"[live test cleanup] WARNING: failed to delete article "
-                  f"{article_id}: {exc}. Delete it manually on Figshare.")
+            cleanup_failures.append((article_id, exc))
+
+    if cleanup_failures:
+        failures_str = "\n".join(
+            f"  {article_id}: {exc}" for article_id, exc in cleanup_failures
+        )
+        pytest.fail(
+            f"live figshare test cleanup failed; private test articles may"
+            f"require manual deletion:\n{failures_str}",
+            pytrace=False,
+        )
