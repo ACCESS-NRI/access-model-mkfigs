@@ -44,14 +44,15 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The testing is layered by how close each part gets to the real Figshare API
-(which has no sandbox for private accounts and no way to unpublish, so most
-of it runs against an in-memory fake rather than the live service):
+The fast suite is a single end-to-end test of the `pushit` happy path
+(notebook classification -> Figshare upload -> docs-tree copy -> mkdocs.yml
+nav update -> pages/index.md update), run against an in-memory fake
+Figshare rather than the live service (which has no sandbox for private
+accounts and no way to unpublish):
 
 | Layer | What it covers | Run |
 |---|---|---|
-| Fast / mocked | Figshare upload/resume/dedup logic, both `--check-figshare-*` modes, `pushit.py`'s docs-tree building, `restore.py`, `run.py`'s papermill orchestration | `pytest` |
-| mkdocs build check | Builds a small fixture site with `mkdocs build --strict` | `pip install -e ".[dev,docstest]"` then `pytest` |
+| Fast / mocked | `pushit.py`'s full happy-path flow, end to end | `pytest` |
 | Live Figshare (opt-in) | Creates and deletes one real private article — never publishes | `MKFIGS_LIVE_FIGSHARE_TESTS=1 FIGSHARE_TOKEN=... pytest tests/live/` |
 
 Coverage report:
@@ -61,7 +62,6 @@ coverage run --source=mkfigs -m pytest
 coverage report -m
 ```
 
-See [`tests/README.md`](tests/README.md) for a detailed walkthrough — running
-individual tests, the layered structure, and the optional `docstest`/live
-Figshare layers.
+See [`tests/README.md`](tests/README.md) for more, including the opt-in
+live Figshare layer.
 

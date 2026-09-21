@@ -7,99 +7,53 @@ pip install -e ".[dev]"
 pytest
 ```
 
-You should see `52 passed, 2 skipped` if this environment happens to have
-the full `mkdocs` + `mkdocs-material` + `mkdocs-jupyter` stack available
-(however it got there — see "The mkdocs build check" below), or
-`51 passed, 3 skipped` if it doesn't. Either outcome is fine — nothing to
-worry about, and no separate command needed either way; plain `pytest`
-always picks it up.
+You should see `1 passed`. No flags, no environment variables, no optional
+extras needed.
 
 ## How it's organised
 
-The suite is layered by how close each part gets to the real Figshare API,
-because Figshare has no sandbox environment for private accounts and no way
-to unpublish or delete a published article — see the comments in
-`conftest.py` and `tests/live/conftest.py` for the full reasoning.
+This suite covers only the single happy-path run of the `pushit` command
+— the workflow the rest of the tooling exists to support — mocked against
+an in-memory fake Figshare rather than a real account. Figshare has no
+sandbox environment for private accounts and no way to unpublish or delete
+a published article; see the comments in `conftest.py` for the full
+reasoning.
 
 | File | Covers |
 |---|---|
-| `test_configdoc_unit.py` | Small helper functions, tested on their own |
-| `test_upload_parts.py` | What happens if an upload to Figshare is interrupted or fails partway through, and how it picks back up |
-| `test_figshare_uploader.py` | Uploading files to Figshare — including reusing files already there, and replacing ones that changed |
-| `test_restore.py` | Downloading previously-uploaded figures and notebooks onto a fresh machine |
-| `test_run_notebook.py` | Running a notebook and handling failures |
-| `test_pushit_modes.py` | The main `pushit` command end to end — a normal run, dry runs, and the two safety-check modes |
-| `test_run.py` | A fix for a bug where running notebooks at the same time could clash with each other |
-| `test_mkdocs_build_offline.py` | Building the documentation website, to catch broken pages before they go live |
+| `test_pushit_modes.py` | One test: a full `pushit` run — notebook classification, Figshare upload, docs-tree copy, mkdocs.yml nav update, pages/index.md update |
 | `live/` | The one test that talks to the real Figshare — see below |
 
-Everything except the last two runs in well under a second, needs no
-network access, and never touches a real Figshare account.
+The fast test runs in well under a second, needs no network access, and
+never touches a real Figshare account.
 
-## Running one test at a time
-
-List every test without running anything — a good first step to see the
-shape of the suite:
+## Running it
 
 ```bash
-pytest --collect-only -q
+pytest -v -s tests/test_pushit_modes.py
 ```
 
-Run one file, verbose, with any print output visible (`-v` names each test
-as it runs; `-s` shows anything the test or the code under test prints —
-useful here, since a lot of `configdoc.py`/`pushit.py` prints
-`[figshare] ...`-style progress messages as they go):
+(`-v` names the test as it runs; `-s` shows anything the test or the code
+under test prints — useful here, since a lot of `configdoc.py`/`pushit.py`
+prints `[figshare] ...`-style progress messages as they go.)
+
+Full traceback, if the default summary isn't enough:
 
 ```bash
-pytest -v -s tests/test_configdoc_unit.py
+pytest -v -s --tb=long tests/test_pushit_modes.py
 ```
 
-Run a single test function — copy the `::`-qualified name straight out of
-`--collect-only` or `-v` output:
-
-```bash
-pytest -v -s tests/test_figshare_uploader.py::test_get_or_create_article_finds_existing_by_title_search
-```
-
-Stop at the first failure instead of running everything and drowning in
-output:
-
-```bash
-pytest -x -v -s tests/test_pushit_modes.py
-```
-
-Full tracebacks, if the default summary isn't enough:
-
-```bash
-pytest -v -s --tb=long tests/test_upload_parts.py
-```
-
-A sensible order to go through file-by-file, starting with the simplest
-and most self-contained and building up — and whether it's worth
-inspecting the actual files each one creates afterwards (some are pure
-in-memory functions with nothing on disk to look at once the test
-finishes; see `--basetemp` below for how to browse the ones that do):
-
-| Run | Worth inspecting the files it creates? |
-|---|---|
-| `pytest -v -s tests/test_configdoc_unit.py` | No |
-| `pytest -v -s tests/test_upload_parts.py` | No — watch it with `-s` instead |
-| `pytest -v -s tests/test_run.py` | No |
-| `pytest -v -s tests/test_figshare_uploader.py` | Yes — rewritten markdown with real (fake) Figshare URLs, a `figshare_manifest.json` |
-| `pytest -v -s tests/test_restore.py` | Yes — a whole fake repo tree with downloaded notebooks and copied `.md` files |
-| `pytest -v -s tests/test_run_notebook.py` | Yes — `mkfigs_run.log`/`mkfigs_errors.log`, plus the CLI's own "next steps" instructions via `-s` |
-| `pytest -v -s tests/test_pushit_modes.py` | Yes, the most — a full fake paper-repo tree: docs markdown, `notebooks_urls.json`, an updated `mkdocs.yml`, copied-back notebooks |
-
-To actually browse what one of these produces, point `--basetemp` at a
-fixed location for the whole file rather than a single test — each test
-function gets its own subfolder underneath, plus a `<test_name>_current`
+Worth inspecting the files it creates afterwards — a full fake paper-repo
+tree: docs markdown, `notebooks_urls.json`, an updated `mkdocs.yml`,
+copied-back notebooks. Point `--basetemp` at a fixed location to browse it
+— the test gets its own subfolder underneath, plus a `<test_name>_current`
 symlink that always points at its most recent run (handy since the exact
 subfolder name gets a random numeric suffix that changes between runs):
 
 ```bash
 pytest -s --basetemp=/tmp/mkfigs-inspect tests/test_pushit_modes.py
-ls /tmp/mkfigs-inspect/            # find the *_current symlink you want
-find /tmp/mkfigs-inspect/<name>_current -type f
+ls /tmp/mkfigs-inspect/            # find the *_current symlink
+find /tmp/mkfigs-inspect/*_current -type f
 ```
 
 `--basetemp` wipes its contents at the *start* of the next run pointed at
@@ -114,30 +68,10 @@ coverage run --source=mkfigs -m pytest
 coverage report -m
 ```
 
-## The mkdocs build check
-
-`test_mkdocs_build_offline.py` runs a real `mkdocs build --strict` against
-`fixtures/minimal_site/` — a small fixture doc tree shaped the way
-`pushit.py` actually produces one, using the same `mkdocs-material` +
-`mkdocs-jupyter` combination as the real paper-repo sites. It's
-deliberately not a clone of the real `access-om3-paper-1` repo, which pulls
-in a custom theme, several other plugins, and would make this suite slow
-and fragile for reasons that have nothing to do with this repo's own bugs.
-
-It skips itself automatically — no flag or special invocation needed — if
-`mkdocs`, `mkdocs-material`, and `mkdocs-jupyter` aren't all importable in
-whatever environment you're running `pytest` from, and it runs as part of
-a plain `pytest` once they are. The `docstest` extra below is just one way
-to get them there; if your environment already has them for some other
-reason (e.g. you also use it for real docs work), this test runs
-automatically without you doing anything further:
-
-```bash
-pip install -e ".[dev,docstest]"
-pytest
-```
-
-(or `pytest tests/test_mkdocs_build_offline.py` to run just this file)
+Coverage from this one test is necessarily partial — it exercises the
+happy path through `pushit.py`, `configdoc.py`'s upload/rewrite logic, and
+enough of `restore.py`/`run.py` to be invoked indirectly, but none of
+their edge cases or failure modes.
 
 ## The opt-in live Figshare test
 
