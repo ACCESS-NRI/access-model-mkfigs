@@ -1,6 +1,7 @@
 # access-model-mkfigs
 
 [![CI](https://github.com/ACCESS-NRI/access-model-mkfigs/actions/workflows/ci.yml/badge.svg)](https://github.com/ACCESS-NRI/access-model-mkfigs/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/ACCESS-NRI/access-model-mkfigs/branch/master/graph/badge.svg)](https://codecov.io/gh/ACCESS-NRI/access-model-mkfigs)
 
 Evaluation figure workflow tools for ACCESS model paper repositories.
 
@@ -36,8 +37,29 @@ mkfigs-pushit  [--dry-run] [--skip-figshare] [--check-figshare-upload]
 mkfigs-restore [--ename ENAME] [--force]
 ```
 
-## Credits
+## Testing
 
-This package was created with [Cookiecutter](https://github.com/audreyr/cookiecutter) and the
-[`ACCESS-NRI/cookiecutter-pypackage-access`](https://github.com/ACCESS-NRI/cookiecutter-pypackage-access)
-project template.
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+The testing is layered by how close each part gets to the real Figshare API
+(which has no sandbox for private accounts and no way to unpublish, so most
+of it runs against an in-memory fake rather than the live service):
+
+| Layer | What it covers | Run |
+|---|---|---|
+| Fast / mocked | Figshare upload/reuse logic, `pushit.py`'s end-to-end flow and its `--check-figshare-*` modes, `restore.py`, `run.py`'s papermill orchestration | `pytest` |
+| Live Figshare (opt-in) | Creates and deletes one real private article — never publishes | `MKFIGS_LIVE_FIGSHARE_TESTS=1 FIGSHARE_TOKEN=... pytest tests/live/` |
+
+Coverage report:
+
+```bash
+coverage run --source=mkfigs -m pytest
+coverage report -m
+```
+
+See [`tests/README.md`](tests/README.md) for a detailed walkthrough — running
+individual tests, the layered structure, and the opt-in live Figshare layer.
+
