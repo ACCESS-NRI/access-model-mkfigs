@@ -84,7 +84,7 @@ def live_article_identity() -> dict[str, str]:
     """
     Return a unique experiment/title pair for one live test.
 
-    Static titles are unsafe because a previous crashed test may have left 
+    Static titles are unsafe because a previous crashed test may have left
     a private article behind. A later test could then accidentally reuse
     that old article through _get_or_create_article().
     """

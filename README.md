@@ -62,4 +62,3 @@ coverage report -m
 
 See [`tests/README.md`](tests/README.md) for a detailed walkthrough — running
 individual tests, the layered structure, and the opt-in live Figshare layer.
-
