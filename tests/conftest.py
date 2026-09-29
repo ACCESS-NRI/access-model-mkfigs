@@ -46,6 +46,13 @@ class FakeFigshareServer:
         self._next_article_id = 1000
         self._next_file_id = 5000
         self.deleted_file_ids: list[int] = []   # audit trail for assertions
+        self.created_article_ids: list[int] = []
+
+        # observable article discovery state
+        self.article_search_calls = 0
+        self.article_list_calls = 0
+        self.article_search_override: list[dict] | None = None
+
 
     # -- helpers ---------------------------------------------------------
     def _file_json(self, fid: int) -> dict:
@@ -103,6 +110,11 @@ class FakeFigshareServer:
 
     # -- HTTP callbacks ----------------------------------------------------
     def _articles_search(self, request):
+        self.article_search_calls += 1
+
+        if self.article_search_override is not None:
+            return (200, {}, json.dumps(self.article_search_override))
+
         body = json.loads(request.body or "{}")
         # Real Figshare's search_for syntax is ":title: <text>"; we do a
         # plain substring match here, which is enough to exercise the
@@ -126,15 +138,29 @@ class FakeFigshareServer:
             self._next_article_id += 1
             self._articles[aid] = {"title": data["title"]}
             self._article_files[aid] = []
+            self.created_article_ids.append(aid)
             loc = f"{FIGSHARE_BASE}/account/articles/{aid}"
             return (201, {}, json.dumps({"location": loc}))
 
-        # GET, paginated
-        qs = dict(pair.split("=") for pair in (request.url.split("?", 1)[1] or "").split("&") if "=" in pair) \
-            if "?" in request.url else {}
+        # GET, paginated article listing
+        self.article_list_calls += 1
+        if "?" in request.url:
+            qs = dict(
+                pair.split("=")
+                for pair in request.url.split("?", 1)[1].split("&") if "=" in pair
+            )
+        else:
+            qs = {}
+
         page = int(qs.get("page", 1))
         page_size = int(qs.get("page_size", 10))
-        all_articles = [{"id": aid, "title": a["title"]} for aid, a in self._articles.items()]
+        all_articles = [
+            {
+                "id": aid,
+                "title": a["title"]
+            } for aid, a in self._articles.items()
+        ]
+
         start = (page - 1) * page_size
         batch = all_articles[start:start + page_size]
         return (200, {}, json.dumps(batch))

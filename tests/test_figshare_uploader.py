@@ -46,25 +46,26 @@ def test_get_or_create_article_finds_existing_by_title_search(fake_figshare, tmp
     assert found_id == existing_id  # reused the pre-existing article, no duplicate created
 
 
-def test_get_or_create_article_falls_back_to_pagination_when_search_misses(
-    fake_figshare, tmp_path, monkeypatch
-):
-    """Regression coverage for the '+'/'-' title-search quirk: Figshare's
-    search endpoint can come back with zero matches for a title that
-    genuinely exists (if it contains '+' or '-', which most experiment
-    names here do) without erroring. _get_or_create_article must fall back
-    to full pagination rather than trusting a clean-but-wrong empty result.
+def test_get_or_create_article_falls_back_to_pagination_when_search_misses(fake_figshare, tmp_path):
+    """
+    A clean but empty search result must fall back to full pagination
     """
     up = _uploader(tmp_path)
     existing_id = fake_figshare.seed_article(up.article_title)
 
-    # Force the search endpoint to return nothing, as if it choked on the
-    # title's special characters, without touching the pagination path.
-    monkeypatch.setattr(fake_figshare, "_articles_search", lambda request: (200, {}, json.dumps([])))
-
+    # Simulate Figshare search returning no result even though the article really exists
+    # The paginated article listing still contains it
+    fake_figshare.article_search_override = []
     found_id = up._get_or_create_article()
 
     assert found_id == existing_id
+
+    # prove that this test genuinely excercised the fallback path
+    assert fake_figshare.article_search_calls == 1
+    assert fake_figshare.article_list_calls == 1
+
+    # pagination found the existing article so no dup should have been created
+    assert fake_figshare.created_article_ids == []
 
 
 # ---------------------------------------------------------------------------
