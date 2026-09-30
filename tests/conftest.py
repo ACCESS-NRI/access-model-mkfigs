@@ -79,19 +79,31 @@ class FakeFigshareServer:
         self._article_files.setdefault(aid, [])
         return aid
 
-    def seed_file(self, article_id: int, name: str, content: bytes,
-                  status: str = "available", file_id: int | None = None) -> int:
+    def seed_file(
+        self,
+        article_id: int,
+        name: str,
+        content: bytes,
+        status: str = "available",
+        file_id: int | None = None
+    ) -> int:
         """Insert a file as if a previous run had already uploaded it."""
         fid = file_id if file_id is not None else self._next_file_id
         self._next_file_id = max(self._next_file_id, fid + 1)
         md5 = hashlib.md5(content).hexdigest()
         self._files[fid] = {
-            "article_id": article_id, "name": name, "size": len(content),
+            "article_id": article_id,
+            "name": name,
+            "size": len(content),
             "status": status,
             "supplied_md5": md5,
             "computed_md5": md5 if status == "available" else "",
+            "_uploaded_parts": {},  # hold bytes received from PUT
+            "_uploaded_content": content if status == "available" else None,  # an existent file content
         }
-        self._article_files.setdefault(article_id, []).append(fid)
+        self._article_files.setdefault(
+            article_id, []
+        ).append(fid)
         return fid
 
     def files_for(self, article_id: int) -> list[dict]:
@@ -168,12 +180,19 @@ class FakeFigshareServer:
     def _article_files_collection(self, request, article_id):
         article_id = int(article_id)
         if request.method == "POST":
+            # create an upload session but does not mean the bytes have arrived.
             data = json.loads(request.body or "{}")
             fid = self._next_file_id
             self._next_file_id += 1
             self._files[fid] = {
-                "article_id": article_id, "name": data["name"], "size": data["size"],
-                "status": "created", "supplied_md5": data.get("md5", ""), "computed_md5": "",
+                "article_id": article_id,
+                "name": data["name"],
+                "size": data["size"],
+                "status": "created",
+                "_uploaded_parts": {},
+                "_uploaded_content": None,
+                "supplied_md5": data.get("md5", ""),
+                "computed_md5": "",
             }
             self._article_files.setdefault(article_id, []).append(fid)
             loc = f"{FIGSHARE_BASE}/account/articles/{article_id}/files/{fid}"
@@ -222,13 +241,44 @@ class FakeFigshareServer:
         }])
         return (200, {}, json.dumps({"parts": parts}))
 
-    def _file_upload_part(self, request, article_id, file_id, part_no):
-        file_id, part_no = int(file_id), int(part_no)
+    def _file_upload_part(
+        self,
+        request,
+        article_id,
+        file_id,
+        part_no,
+    ):
+        # The PUT request to upload a part of a file. fake reads requets.body & checks expected byte count
+        file_id = int(file_id)
+        part_no = int(part_no)
+
         f = self._files[file_id]
-        for p in f.get("_parts", []):
-            if p["partNo"] == part_no:
-                p["status"] = "COMPLETE"
-        return (200, {}, "")
+
+        # Look for the part in the file's parts list
+        part = next(
+            (candidate for candidate in f.get("_parts", []) if candidate["partNo"] == part_no),
+            None,
+        )
+
+        if part is None:
+            return (404, {}, json.dumps({"error": f"part {part_no} not found for file {file_id}"}))
+
+        body = request.body
+        if body is None:
+            body = b""
+        elif isinstance(body, str):
+            body = body.encode()
+        elif not isinstance(body, bytes):
+            body = bytes(body)
+
+        expected_size = part["endOffset"] - part["startOffset"] + 1
+        if len(body) != expected_size:
+            return (400, {}, json.dumps({"error": f"part {part_no} size mismatch: expected {expected_size}, got {len(body)}"}))
+
+        # store exactly what the client sent
+        f["_uploaded_parts"][part_no] = body
+        part["status"] = "COMPLETE"
+        return (200, {}, json.dumps({"message": f"part {part_no} uploaded successfully"}))
 
     def register(self, mock: responses.RequestsMock) -> None:
         base = re.escape(FIGSHARE_BASE)

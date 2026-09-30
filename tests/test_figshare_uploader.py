@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mkfigs.configdoc import FigshareUploader
+import requests
 
-from .conftest import make_png
+from .conftest import FIGSHARE_BASE, make_png
+
 
 
 def _uploader(tmp_path: Path, token="tok") -> FigshareUploader:
@@ -19,6 +20,46 @@ def _uploader(tmp_path: Path, token="tok") -> FigshareUploader:
     mdfol = tmp_path / "mkmd"
     mdfol.mkdir(exist_ok=True)
     return FigshareUploader(token=token, experiment="test_experiment_01", mdfol=str(mdfol))
+
+
+def test_fake_figshare_records_uploaded_part_bytes(
+    fake_figshare,
+):
+    """
+    The fake server must retain the exact bytes received by PUT.
+    """
+    article_id = fake_figshare.seed_article("test")
+    payload = b"actual uploaded bytes"
+
+    response = requests.post(
+        f"{FIGSHARE_BASE}/account/articles/{article_id}/files",
+        json={
+            "name": "testfile.txt",
+            "size": len(payload),
+            "md5": "client-supplied-md5"
+        },
+    )
+    response.raise_for_status()
+
+    file_url = response.json()["location"]
+    file_id = int(file_url.rsplit("/", 1)[-1])
+
+    response = requests.get(file_url)
+    response.raise_for_status()
+
+    upload_url = response.json()["upload_url"]
+    response = requests.get(upload_url)
+    response.raise_for_status()
+    parts = response.json()["parts"]
+    assert len(parts) == 1
+
+    response = requests.put(
+        f"{upload_url}/1",
+        data=payload,
+    )
+    response.raise_for_status()
+
+    assert fake_figshare._files[file_id]["_uploaded_parts"][1] == payload
 
 
 # ---------------------------------------------------------------------------
