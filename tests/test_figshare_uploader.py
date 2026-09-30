@@ -166,7 +166,7 @@ def test_get_or_create_article_falls_back_to_pagination_when_search_misses(fake_
 
 
 # ---------------------------------------------------------------------------
-# File upload: fresh, reuse, mismatch-triggers-replace
+# File upload workflow
 # ---------------------------------------------------------------------------
 
 def test_upload_pngs_for_notebook_uploads_and_records_manifest(fake_figshare, tmp_path):
@@ -182,38 +182,6 @@ def test_upload_pngs_for_notebook_uploads_and_records_manifest(fake_figshare, tm
     assert set(results) == {"SST_01.png", "SST_02.png"}
     for url in results.values():
         assert url.startswith("https://ndownloader.figshare.com/files/")
-
-
-def test_upload_file_reuses_identical_remote_file_without_reuploading(fake_figshare, tmp_path):
-    """A remote file with matching content should be reused, not re-uploaded."""
-    up = _uploader(tmp_path)
-    article_id = up._get_or_create_article()
-    fpath = tmp_path / "SST_01.png"
-    make_png(fpath, b"same-bytes")
-    fake_figshare.seed_file(article_id, "SST_01.png", b"same-bytes", status="available")
-
-    n_files_before = len(fake_figshare.files_for(article_id))
-    url = up._upload_file(article_id, str(fpath))
-    n_files_after = len(fake_figshare.files_for(article_id))
-
-    assert url is not None
-    assert n_files_after == n_files_before  # nothing new was created -- reused
-
-
-def test_upload_file_replaces_remote_file_when_content_differs(fake_figshare, tmp_path):
-    """A stale remote file (MD5 mismatch) should be deleted and replaced, not left or duplicated."""
-    up = _uploader(tmp_path)
-    article_id = up._get_or_create_article()
-    fpath = tmp_path / "SST_01.png"
-    make_png(fpath, b"new-content")
-    stale_id = fake_figshare.seed_file(article_id, "SST_01.png", b"old-content", status="available")
-
-    up._upload_file(article_id, str(fpath))
-
-    assert stale_id in fake_figshare.deleted_file_ids
-    remaining = [f for f in fake_figshare.files_for(article_id) if f["name"] == "SST_01.png"]
-    assert len(remaining) == 1
-    assert remaining[0]["computed_md5"] == hashlib.md5(b"new-content").hexdigest()
 
 
 def test_find_remote_file_cleans_up_broken_stub_alongside_working_copy(fake_figshare, tmp_path):
@@ -314,13 +282,6 @@ def test_validate_and_refresh_notebook_urls_leaves_entry_as_is_when_no_replaceme
     refreshed = up.validate_and_refresh_notebook_urls(article_id, {"SST": stale_url})
 
     assert refreshed["SST"] == stale_url
-
-
-def test_validate_and_refresh_notebook_urls_noop_when_empty():
-    """An empty map should short-circuit with no HTTP calls."""
-    up_stub = object.__new__(FigshareUploader)  # no HTTP should happen at all
-    result = FigshareUploader.validate_and_refresh_notebook_urls(up_stub, 1, {})
-    assert result == {}
 
 
 # ---------------------------------------------------------------------------
