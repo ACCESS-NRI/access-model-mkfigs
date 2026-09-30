@@ -10,9 +10,9 @@ import json
 from pathlib import Path
 
 import requests
+import hashlib
 
 from .conftest import FIGSHARE_BASE, make_png
-
 
 
 def _uploader(tmp_path: Path, token="tok") -> FigshareUploader:
@@ -60,6 +60,61 @@ def test_fake_figshare_records_uploaded_part_bytes(
     response.raise_for_status()
 
     assert fake_figshare._files[file_id]["_uploaded_parts"][1] == payload
+
+
+def test_fake_figshare_computes_md5_from_uploaded_bytes(fake_figshare):
+    """
+    Compute md5 must come from uploaded bytes not client supplied metadata
+    """
+    article_id = fake_figshare.seed_article("test")
+    payload = b"actual uploaded bytes"
+    wrong_md5 = "client-supplied-md5"
+
+    response = requests.post(
+        f"{FIGSHARE_BASE}/account/articles/{article_id}/files",
+        json={
+            "name": "testfile.txt",
+            "size": len(payload),
+            "md5": wrong_md5,
+        },
+    )
+    response.raise_for_status()
+
+    file_url = response.json()["location"]
+
+    response = requests.get(file_url)
+    response.raise_for_status()
+
+    upload_url = response.json()["upload_url"]
+
+    # Initialise/discover upload parts
+    response = requests.get(upload_url)
+    response.raise_for_status()
+
+    parts = response.json()["parts"]
+    assert len(parts) == 1
+    assert parts[0]["partNo"] == 1
+
+    response = requests.put(
+        f"{upload_url}/1",
+        data=payload,
+    )
+    response.raise_for_status()
+
+    response = requests.post(file_url)
+    response.raise_for_status()
+
+    response = requests.get(file_url)
+    response.raise_for_status()
+
+    remote_file = response.json()
+
+    assert remote_file["status"] == "available"
+    # The fake keeps the checksum claimed by the client
+    assert remote_file["supplied_md5"] == wrong_md5
+
+    assert remote_file["computed_md5"] != wrong_md5
+    assert remote_file["computed_md5"] == hashlib.md5(payload).hexdigest()
 
 
 # ---------------------------------------------------------------------------

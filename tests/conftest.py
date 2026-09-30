@@ -208,16 +208,43 @@ class FakeFigshareServer:
         batch = all_files[start:start + page_size]
         return (200, {}, json.dumps(batch))
 
-    def _file_item(self, request, article_id, file_id):
+    def _file_item(
+        self,
+        request,
+        article_id,
+        file_id
+    ):
         file_id = int(file_id)
         if request.method == "GET":
             return (200, {}, json.dumps(self._file_json(file_id)))
         if request.method == "POST":
-            # "complete" call: promote to available, computed_md5 = supplied_md5
             f = self._files[file_id]
+
+            parts = sorted(
+                f.get("_parts", []),
+                key=lambda p: p["partNo"],
+            )
+            if not parts or any(part["status"] != "COMPLETE" for part in parts):
+                return (400, {}, json.dumps({"error": "file upload incomplete"}))
+            
+            uploaded_parts = f.get("_uploaded_parts", {})
+
+            try:
+                content = b"".join(
+                    uploaded_parts[part["partNo"]]
+                    for part in parts
+                )
+            except KeyError as e:
+                return (400, {}, json.dumps({"error": f"missing part {e.args[0]}"}))
+            
+            if len(content) != f["size"]:
+                return (400, {}, json.dumps({"error": f"uploaded content size mismatch: expected {f['size']}, got {len(content)}"}))
+            
+            f["_uploaded_content"] = content
+            f["computed_md5"] = hashlib.md5(content).hexdigest()  # now compute the md5 of the uploaded content
             f["status"] = "available"
-            f["computed_md5"] = f["supplied_md5"]
-            return (200, {}, json.dumps({}))
+            return (200, {}, json.dumps(self._file_json(file_id)))
+
         if request.method == "DELETE":
             self._files.pop(file_id, None)
             for aid, ids in self._article_files.items():
