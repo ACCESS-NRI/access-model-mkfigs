@@ -226,7 +226,7 @@ class FakeFigshareServer:
             )
             if not parts or any(part["status"] != "COMPLETE" for part in parts):
                 return (400, {}, json.dumps({"error": "file upload incomplete"}))
-            
+
             uploaded_parts = f.get("_uploaded_parts", {})
 
             try:
@@ -236,10 +236,10 @@ class FakeFigshareServer:
                 )
             except KeyError as e:
                 return (400, {}, json.dumps({"error": f"missing part {e.args[0]}"}))
-            
+
             if len(content) != f["size"]:
                 return (400, {}, json.dumps({"error": f"uploaded content size mismatch: expected {f['size']}, got {len(content)}"}))
-            
+
             f["_uploaded_content"] = content
             f["computed_md5"] = hashlib.md5(content).hexdigest()  # now compute the md5 of the uploaded content
             f["status"] = "available"
