@@ -12,6 +12,7 @@ from pathlib import Path
 import requests
 import hashlib
 
+from mkfigs.configdoc import FigshareUploader
 from .conftest import FIGSHARE_BASE, make_png
 
 
