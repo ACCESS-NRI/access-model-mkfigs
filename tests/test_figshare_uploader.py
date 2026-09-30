@@ -213,7 +213,7 @@ def test_upload_file_replaces_remote_file_when_content_differs(fake_figshare, tm
     assert stale_id in fake_figshare.deleted_file_ids
     remaining = [f for f in fake_figshare.files_for(article_id) if f["name"] == "SST_01.png"]
     assert len(remaining) == 1
-    assert remaining[0]["computed_md5"] == __import__("hashlib").md5(b"new-content").hexdigest()
+    assert remaining[0]["computed_md5"] == hashlib.md5(b"new-content").hexdigest()
 
 
 def test_find_remote_file_cleans_up_broken_stub_alongside_working_copy(fake_figshare, tmp_path):
