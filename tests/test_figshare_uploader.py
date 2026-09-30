@@ -170,18 +170,44 @@ def test_get_or_create_article_falls_back_to_pagination_when_search_misses(fake_
 # ---------------------------------------------------------------------------
 
 def test_upload_pngs_for_notebook_uploads_and_records_manifest(fake_figshare, tmp_path):
-    """Only PNGs belonging to the given notebook should be uploaded, not others in the same folder."""
+    """
+    Upload only this notebook's pngs and persist their remote URLs.
+    """
     up = _uploader(tmp_path)
     mdfol = Path(up.mdfol)
-    make_png(mdfol / "SST_01.png")
-    make_png(mdfol / "SST_02.png")
-    make_png(mdfol / "MLD_01.png")  # belongs to a different notebook
+
+    make_png(mdfol / "SST_01.png", b"sst-one")
+    make_png(mdfol / "SST_02.png", b"sst-two")
+    make_png(mdfol / "MLD_01.png", b"other-notebook")
 
     results = up.upload_pngs_for_notebook("SST")
 
     assert set(results) == {"SST_01.png", "SST_02.png"}
-    for url in results.values():
-        assert url.startswith("https://ndownloader.figshare.com/files/")
+    assert all(
+        url.startswith(
+            "https://ndownloader.figshare.com/files/"
+        )
+        for url in results.values()
+    )
+
+    manifest = json.loads(
+        (mdfol / "figshare_manifest.json").read_text()
+    )
+    article_id = manifest[f"article_id_{up.experiment}"]
+    assert manifest["file_SST_01.png"] == {
+        "md5": hashlib.md5(b"sst-one").hexdigest(),
+        "download_url": results["SST_01.png"],
+    }
+    assert manifest["file_SST_02.png"] == {
+        "md5": hashlib.md5(b"sst-two").hexdigest(),
+        "download_url": results["SST_02.png"],
+    }
+    assert "file_MLD_01.png" not in manifest
+    remote_names = {
+        remote_file["name"]
+        for remote_file in fake_figshare.files_for(article_id)
+    }
+    assert remote_names == {"SST_01.png", "SST_02.png"}
 
 
 def test_find_remote_file_cleans_up_broken_stub_alongside_working_copy(fake_figshare, tmp_path):
