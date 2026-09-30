@@ -321,3 +321,92 @@ def test_validate_and_refresh_notebook_urls_noop_when_empty():
     up_stub = object.__new__(FigshareUploader)  # no HTTP should happen at all
     result = FigshareUploader.validate_and_refresh_notebook_urls(up_stub, 1, {})
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Remote-file reconciliation
+# ---------------------------------------------------------------------------
+
+def test_reconcile_remote_file_returns_fresh_when_missing(
+    fake_figshare,
+    tmp_path,
+):
+    """
+    If no remote file exists, it should be marked as fresh for upload.
+    """
+    up = _uploader(tmp_path)
+    article_id = fake_figshare.seed_article("test")
+    file_md5 = hashlib.md5(b"content").hexdigest()
+
+    result = up._reconcile_remote_file(article_id, "SST_01.png", file_md5)
+
+    assert result == ("fresh", None, None)
+
+
+def test_reconcile_remote_file_reuses_matching_complete_file(
+    fake_figshare,
+    tmp_path,
+):
+    """
+    If a remote file exists and its MD5 matches, it should be reused.
+    """
+    up = _uploader(tmp_path)
+    article_id = fake_figshare.seed_article("test")
+    content = b"same-content"
+    file_id = fake_figshare.seed_file(article_id, "SST_01.png", content, status="available")
+
+    file_md5 = hashlib.md5(content).hexdigest()
+    result = up._reconcile_remote_file(article_id, "SST_01.png", file_md5)
+
+    assert result == (
+        "reuse",
+        f"https://ndownloader.figshare.com/files/{file_id}",
+        None
+    )
+
+    assert file_id not in fake_figshare.deleted_file_ids  # not deleted, still there
+
+
+def test_reconcile_remote_file_replaces_mismatched_complete_file(
+    fake_figshare,
+    tmp_path,
+):
+    """
+    If a remote file exists but its MD5 does not match, it should be replaced.
+    """
+    up = _uploader(tmp_path)
+    article_id = fake_figshare.seed_article("test")
+    stale_id = fake_figshare.seed_file(article_id, "SST_01.png", b"old-content", status="available")
+
+    file_md5 = hashlib.md5(b"new-content").hexdigest()
+    result = up._reconcile_remote_file(article_id, "SST_01.png", file_md5)
+
+    assert result == ("fresh", None, None)
+
+    assert stale_id in fake_figshare.deleted_file_ids  # the stale file was deleted
+
+
+def test_reconcile_remote_file_resumes_matching_incomplete_file(
+    fake_figshare,
+    tmp_path,
+):
+    """
+    If a remote file exists but is incomplete, it should be resumed.
+    """
+    up = _uploader(tmp_path)
+    article_id = fake_figshare.seed_article("test")
+    content = b"same-content"
+    file_id = fake_figshare.seed_file(article_id, "SST_01.png", content, status="created")
+
+    file_md5 = hashlib.md5(content).hexdigest()
+    result = up._reconcile_remote_file(article_id, "SST_01.png", file_md5)
+
+    expected_url = f"{FIGSHARE_BASE}/account/articles/{article_id}/files/{file_id}/upload"
+
+    assert result == (
+        "resume",
+        file_id,
+        expected_url,
+    )
+
+    assert file_id not in fake_figshare.deleted_file_ids  # not deleted, still there
