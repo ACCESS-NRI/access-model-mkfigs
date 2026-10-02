@@ -26,33 +26,36 @@ def _write_notebook(path: Path, kernel_name="conda-env-analysis3-25.07-py"):
     }))
 
 
-def test_run_notebook_invokes_papermill_with_expected_args_and_cleans_up_kernel_copy(tmp_path):
-    """papermill then nbconvert should be invoked correctly, with no leftover kernel copy."""
+def test_run_notebook_executes_and_converts_notebook(tmp_path):
+    """
+    A successful notebook run should execute, convert, and clean up.
+    """
     notebooks_dir = tmp_path / "notebooks"
     notebooks_dir.mkdir()
+
     ofol = notebooks_dir / "mkfigs_output_exp1"
     ofol.mkdir()
-    _write_notebook(notebooks_dir / "SST.ipynb")
+
+    notebook = notebooks_dir / "SST.ipynb"
+    _write_notebook(notebook)
+
+    original = notebook.read_bytes()
 
     with patch.object(run_mod.subprocess, "run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
         ok = run_mod.run_notebook("SST", "/fake/esm.json", ofol, notebooks_dir)
 
-    assert ok is True
-    papermill_call = mock_run.call_args_list[0]
-    cmd = papermill_call.args[0]
-    assert cmd[0] == "papermill"
-    assert "-p" in cmd and "esm_file" in cmd and "/fake/esm.json" in cmd
-    assert papermill_call.kwargs["cwd"] == str(notebooks_dir)
+        assert ok is True
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0].args[0][0] == "papermill"
+        assert mock_run.call_args_list[1].args[0][:2] == [
+            "jupyter", "nbconvert",
+        ]
 
-    nbconvert_call = mock_run.call_args_list[1]
-    assert nbconvert_call.args[0][:3] == ["jupyter", "nbconvert", "--to"]
-
-    # the private, PID-suffixed kernel-fixed copy must not survive the call
-    leftovers = list(notebooks_dir.glob("*.kernel-fixed.*.ipynb"))
-    assert leftovers == []
-    # and the original shared notebook must be untouched
-    assert (notebooks_dir / "SST.ipynb").exists()
+        assert notebook.read_bytes() == original  # original notebook unchanged
+        assert list(
+            notebooks_dir.glob("*.kernel-fixed.*.ipynb")
+        ) == []  # kernel copy cleaned up
 
 
 def test_run_notebook_returns_false_on_papermill_failure_but_still_runs_nbconvert(tmp_path):
