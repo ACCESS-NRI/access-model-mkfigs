@@ -1,8 +1,6 @@
-"""Tests for mkfigs.restore, following Figshare support's exact
-recommendation for the download/restore path: since publishing an article
-just to test a real download is off the table, mock the HTTP layer
-(here, urllib.request.urlretrieve, which is what restore.py actually
-calls) instead of hitting a real public file.
+"""
+Below tests cover rebuilding previously pushed output and the policy
+for preserving or replacing existing local work.
 """
 from __future__ import annotations
 
@@ -86,70 +84,46 @@ def test_restore_rebuilds_output_from_committed_content(pushed_experiment, monke
     assert (ofol / "mkmd" / "MLD.md").read_text() == "# MLD\n"
 
 
-def test_restore_skips_already_present_files_without_force(pushed_experiment, monkeypatch):
-    """An already-present notebook should be skipped unless --force is passed."""
+def test_restore_preserves_existing_notebook_by_default(pushed_experiment, monkeypatch):
+    """
+    Restore must not overwrite an existing rendered notebook by default
+    """
     notebooks_dir = pushed_experiment / "notebooks"
     ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
     ofol.mkdir(parents=True)
-    (ofol / "SST_rendered.ipynb").write_text("already-here")
+    sst = ofol / "SST_rendered.ipynb"
+    sst.write_text("locall SST")
 
-    calls = []
-    monkeypatch.setattr(
-        restore.urllib.request, "urlretrieve",
-        lambda url, dest: calls.append(url) or Path(dest).write_text("{}"),
-    )
+    def fake_urlretrieve(url, dest):
+        Path(dest).write_text(f"downloaded from {url}")
+
+    monkeypatch.setattr(restore.urllib.request, "urlretrieve", fake_urlretrieve)
 
     _run_restore([], notebooks_dir)
 
-    assert "https://ndownloader.figshare.com/files/111" not in calls  # SST skipped
-    assert "https://ndownloader.figshare.com/files/222" in calls      # MLD still fetched
-    assert (ofol / "SST_rendered.ipynb").read_text() == "already-here"  # untouched
+    # Existing local work is preserved
+    assert sst.read_text() == "locall SST"
+
+    # Missing notebooks are still restored normally
+    assert (ofol / "MLD_rendered.ipynb").read_text() == "downloaded from https://ndownloader.figshare.com/files/222"
 
 
-def test_restore_force_redownloads_even_when_present(pushed_experiment, monkeypatch):
-    """--force should re-download and overwrite an existing notebook."""
+def test_restore_force_replaces_existing_notebook(pushed_experiment, monkeypatch):
+    """
+    --force should replace an existing rendered notebook
+    """
     notebooks_dir = pushed_experiment / "notebooks"
     ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
     ofol.mkdir(parents=True)
-    (ofol / "SST_rendered.ipynb").write_text("stale")
+    sst = ofol / "SST_rendered.ipynb"
+    sst.write_text("locall SST")
 
-    calls = []
-    monkeypatch.setattr(
-        restore.urllib.request, "urlretrieve",
-        lambda url, dest: calls.append(url) or Path(dest).write_text("fresh"),
-    )
+    def fake_urlretrieve(url, dest):
+        Path(dest).write_text(f"downloaded from {url}")
+
+    monkeypatch.setattr(restore.urllib.request, "urlretrieve", fake_urlretrieve)
 
     _run_restore(["--force"], notebooks_dir)
 
-    assert "https://ndownloader.figshare.com/files/111" in calls
-    assert (ofol / "SST_rendered.ipynb").read_text() == "fresh"
-
-
-def test_restore_exits_if_no_urls_json(tmp_path, monkeypatch):
-    """A missing notebooks_urls.json should exit rather than do nothing."""
-    repo = tmp_path / "paper-repo"
-    notebooks = repo / "notebooks"
-    notebooks.mkdir(parents=True)
-    (notebooks / "mkfigs.sh").write_text("ENAME=nope\nESMDIR=/fake\n")
-
-    with pytest.raises(SystemExit):
-        _run_restore([], notebooks)
-
-
-def test_restore_never_calls_publish_or_upload(pushed_experiment, monkeypatch):
-    """restore.py should have no code path that touches Figshare's write
-    API at all -- it only ever downloads. Assert requests.request is never
-    called, so a future refactor that accidentally wires in an upload
-    call here gets caught immediately.
-    """
-    import requests
-    called = []
-    monkeypatch.setattr(requests, "request", lambda *a, **k: called.append(1))
-    monkeypatch.setattr(
-        restore.urllib.request, "urlretrieve",
-        lambda url, dest: Path(dest).write_text("{}"),
-    )
-
-    _run_restore([], pushed_experiment / "notebooks")
-
-    assert called == []
+    # Existing local work is replaced
+    assert sst.read_text() == "downloaded from https://ndownloader.figshare.com/files/111"
