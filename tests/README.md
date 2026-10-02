@@ -104,14 +104,14 @@ coverage report -m
 
 ## The opt-in live Figshare test
 
-`tests/live/` is the one place in this suite allowed to talk to real
-Figshare. It creates a genuinely new **private** article, uploads a small
-fixture file to it through the real `FigshareUploader.upload()` path,
-verifies it via the private-state API, then deletes the article — every
-time, whether the test passes or fails. It never calls the publish
-endpoint.
+`tests/live/` contains a small set of smoke tests that exercise the real Figshare API against newly created **private** articles. They currently verify that:
 
-Skipped by default. Needs **both** of:
+- a real private file upload completes and Figshare reports the expected checksum
+- uploading identical content again reuses the existing remote file rather than creating a duplicate.
+
+The live tests never publish an article. Each test uses a unique private article and cleanup removes it afterwards.
+
+They are skipped by default. Running them requires both:
 
 ```bash
 export MKFIGS_LIVE_FIGSHARE_TESTS=1
@@ -119,7 +119,6 @@ export FIGSHARE_TOKEN=...   # a real personal Figshare token
 pytest tests/live/ -v
 ```
 
-Deliberately gated behind two flags rather than one, so a token merely
-being present on a dev machine (e.g. for normal NCI use) can't cause silent
-production API calls on every ordinary `pytest` run. This should only ever
-run in a manually-triggered or scheduled CI job, never on every push.
+Having a Figshare token configured by itself is not enough to enable the tests. `tests/test_live_safety.py` verifies that both the explicit opt-in flag and a token are required.
+
+These tests should not run as part of ordinary per-PR CI. If automated, they are better suited to a manually triggered or scheduled workflow.
