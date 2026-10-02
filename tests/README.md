@@ -7,27 +7,26 @@ pip install -e ".[dev]"
 pytest
 ```
 
-You should see `35 passed`. No flags, no environment variables, no optional
-extras needed — plain `pytest` runs the whole thing every time.
+This is deliberately a small safety test suite around the major existing workflows.
+
+The baseline covers:
+
+- notebook execution and failure reporting
+- Figshare article/file upload and reconciliation
+- restoring previously pushed notebook output
+- the main `pushit` workflow
+- safety around the optional real-Figshare smoke tests
 
 ## How it's organised
-
-This suite deliberately covers only the four files closest to the real
-`pushit` workflow, mocked against an in-memory fake Figshare rather than a
-real account — Figshare has no sandbox environment for private accounts and
-no way to unpublish or delete a published article, see the comments in
-`conftest.py` for the full reasoning.
 
 | File | Covers |
 |---|---|
 | `test_pushit_modes.py` | The main `pushit` command end to end — a normal run, dry runs, and the two safety-check modes |
-| `test_figshare_uploader.py` | Uploading files to Figshare — including reusing files already there, and replacing ones that changed |
-| `test_restore.py` | Downloading previously-uploaded figures and notebooks onto a fresh machine |
-| `test_run_notebook.py` | Running a notebook and handling failures |
-| `live/` | The one test that talks to the real Figshare — see below |
-
-Everything except the last runs in well under a second, needs no network
-access, and never touches a real Figshare account.
+| `test_figshare_uploader.py` | Core Figshare article/file upload, reconciliation, and markdown rewriting |
+| `test_restore.py` | Rebuilding previously pushed local output and overwrite behaviour |
+| `test_run_notebook.py` | The main notebook execution path and surfacing notebook failures |
+| `test_live_safety.py` | Ensures real-Figshare tests require explicit opt-in |
+| `live/` | Optional smoke tests against real private Figshare articles |
 
 ## Running one test at a time
 
