@@ -58,8 +58,10 @@ def test_run_notebook_executes_and_converts_notebook(tmp_path):
         ) == []  # kernel copy cleaned up
 
 
-def test_run_notebook_returns_false_on_papermill_failure_but_still_runs_nbconvert(tmp_path):
-    """A papermill failure should return False but still run nbconvert."""
+def test_run_notebook_reports_failure_and_still_converts(tmp_path):
+    """
+    A failed notebook execution should be reported and still converted.
+    """
     notebooks_dir = tmp_path / "notebooks"
     notebooks_dir.mkdir()
     ofol = notebooks_dir / "mkfigs_output_exp1"
@@ -67,11 +69,18 @@ def test_run_notebook_returns_false_on_papermill_failure_but_still_runs_nbconver
     _write_notebook(notebooks_dir / "SST.ipynb")
 
     with patch.object(run_mod.subprocess, "run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1)  # papermill failed
+        mock_run.side_effect = [
+            MagicMock(returncode=1),
+            MagicMock(returncode=0),
+        ]
         ok = run_mod.run_notebook("SST", "/fake/esm.json", ofol, notebooks_dir)
 
     assert ok is False
-    assert mock_run.call_count == 2  # nbconvert still attempted, to surface error output
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0][0] == "papermill"
+    assert mock_run.call_args_list[1].args[0][:2] == [
+        "jupyter", "nbconvert",
+    ]
 
 
 def test_run_notebook_cleans_up_kernel_copy_even_if_papermill_raises(tmp_path):
@@ -155,11 +164,15 @@ def test_main_writes_error_log_for_failed_notebooks(tmp_path, monkeypatch):
     run_mod.main()
 
     mdfol = notebooks_dir / "mkfigs_output_exp1" / "mkmd"
-    assert (mdfol / "mkfigs_run.log").exists()
-    errors_log = (mdfol / "mkfigs_errors.log").read_text()
-    assert "FAILED: MLD" in errors_log
-    assert "RuntimeError: kaboom" in errors_log
-    assert "SST" not in errors_log.split("FAILED: MLD")[0]  # SST's success not logged as an error
+
+    errors_log = mdfol / "mkfigs_errors.log"
+    assert errors_log.exists()
+
+    content = errors_log.read_text()
+
+    assert "FAILED: MLD" in content
+    assert "RuntimeError: kaboom" in content
+    assert "FAILED: SST" not in content
 
 
 def test_main_exits_if_mkfigs_notebooks_env_var_missing(tmp_path, monkeypatch):
