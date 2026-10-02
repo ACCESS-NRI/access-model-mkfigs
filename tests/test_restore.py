@@ -53,27 +53,35 @@ def _run_restore(args, cwd):
             os.chdir(old_cwd)
 
 
-def test_restore_downloads_each_notebook_url_and_copies_markdown(pushed_experiment, monkeypatch):
-    """Every real notebook URL should be downloaded and its markdown copied in."""
+def test_restore_rebuilds_output_from_committed_content(pushed_experiment, monkeypatch):
+    """
+    Restore rendered notebooks and markdown from committed metadata.
+    """
     notebooks_dir = pushed_experiment / "notebooks"
-    downloaded = []
+    downloaded = {}
 
     def fake_urlretrieve(url, dest):
-        downloaded.append((url, str(dest)))
-        Path(dest).write_text("{}")  # stand-in rendered notebook content
+        content = {
+            "https://ndownloader.figshare.com/files/111": '{"notebook": "SST"}',
+            "https://ndownloader.figshare.com/files/222": '{"notebook": "MLD"}',
+        }[url]
+        Path(dest).write_text(content)
+        downloaded[url] = Path(dest)
 
     monkeypatch.setattr(restore.urllib.request, "urlretrieve", fake_urlretrieve)
 
     _run_restore([], notebooks_dir)
 
-    urls_fetched = {u for u, _ in downloaded}
-    assert urls_fetched == {
+    ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
+
+    assert set(downloaded) == {
         "https://ndownloader.figshare.com/files/111",
         "https://ndownloader.figshare.com/files/222",
     }
-    ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
-    assert (ofol / "SST_rendered.ipynb").exists()
-    assert (ofol / "MLD_rendered.ipynb").exists()
+
+    assert (ofol / "SST_rendered.ipynb").read_text() == '{"notebook": "SST"}'
+    assert (ofol / "MLD_rendered.ipynb").read_text() == '{"notebook": "MLD"}'
+
     assert (ofol / "mkmd" / "SST.md").read_text() == "# SST\n"
     assert (ofol / "mkmd" / "MLD.md").read_text() == "# MLD\n"
 
