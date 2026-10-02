@@ -1,10 +1,6 @@
-"""Tests for mkfigs.run: the papermill/nbconvert orchestration in
-run_notebook() and main(), plus _extract_notebook_error(). Complements the
-existing test_run.py, which already covers _fix_kernel's concurrency
-contract in detail.
-
-papermill/jupyter are never actually invoked here -- subprocess.run is
-stubbed so these stay fast and need neither package installed.
+"""
+Below tests cover the major notebook execution path -
+successful papermill/nbconvert and surfacing notebook failures through mkfigs_errors.log.
 """
 from __future__ import annotations
 
@@ -15,8 +11,9 @@ from unittest.mock import MagicMock, patch
 from mkfigs import run as run_mod
 
 
-def _write_notebook(path: Path, kernel_name="conda-env-analysis3-25.07-py"):
+def _write_notebook(path: Path):
     """Write a minimal notebook with the given kernelspec."""
+    kernel_name = "conda-env-analysis3-25.07-py"
     path.write_text(json.dumps({
         "cells": [],
         "metadata": {"kernelspec": {"display_name": kernel_name, "name": kernel_name}},
