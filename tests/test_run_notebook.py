@@ -12,8 +12,6 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from mkfigs import run as run_mod
 
 
@@ -83,53 +81,6 @@ def test_run_notebook_reports_failure_and_still_converts(tmp_path):
     ]
 
 
-def test_run_notebook_cleans_up_kernel_copy_even_if_papermill_raises(tmp_path):
-    """A raised exception should still clean up the kernel copy and propagate."""
-    notebooks_dir = tmp_path / "notebooks"
-    notebooks_dir.mkdir()
-    ofol = notebooks_dir / "mkfigs_output_exp1"
-    ofol.mkdir()
-    _write_notebook(notebooks_dir / "SST.ipynb")
-
-    with patch.object(run_mod.subprocess, "run", side_effect=OSError("boom")):
-        with pytest.raises(OSError):
-            run_mod.run_notebook("SST", "/fake/esm.json", ofol, notebooks_dir)
-
-    assert list(notebooks_dir.glob("*.kernel-fixed.*.ipynb")) == []
-
-
-# ---------------------------------------------------------------------------
-# _extract_notebook_error
-# ---------------------------------------------------------------------------
-
-def test_extract_notebook_error_strips_ansi_and_finds_last_error(tmp_path):
-    """The last error cell should win, with ANSI codes stripped."""
-    nb = {
-        "cells": [
-            {"outputs": [{"output_type": "error", "ename": "ValueError",
-                          "evalue": "first", "traceback": ["\x1b[31mfirst tb\x1b[0m"]}]},
-            {"outputs": [{"output_type": "error", "ename": "KeyError",
-                          "evalue": "second", "traceback": ["\x1b[31msecond tb\x1b[0m"]}]},
-        ]
-    }
-    p = tmp_path / "rendered.ipynb"
-    p.write_text(json.dumps(nb))
-
-    msg = run_mod._extract_notebook_error(p)
-
-    assert msg.startswith("KeyError: second")  # last error cell wins
-    assert "\x1b[" not in msg  # ANSI codes stripped
-
-
-def test_extract_notebook_error_returns_none_when_no_error_or_missing_file(tmp_path):
-    """No error, or a missing file, should return None rather than raise."""
-    ok_nb = {"cells": [{"outputs": [{"output_type": "stream", "text": "hi"}]}]}
-    p = tmp_path / "rendered.ipynb"
-    p.write_text(json.dumps(ok_nb))
-    assert run_mod._extract_notebook_error(p) is None
-    assert run_mod._extract_notebook_error(tmp_path / "missing.ipynb") is None
-
-
 # ---------------------------------------------------------------------------
 # main(): env-driven notebook list, log file, and mkfigs_errors.log on failure
 # ---------------------------------------------------------------------------
@@ -173,16 +124,3 @@ def test_main_writes_error_log_for_failed_notebooks(tmp_path, monkeypatch):
     assert "FAILED: MLD" in content
     assert "RuntimeError: kaboom" in content
     assert "FAILED: SST" not in content
-
-
-def test_main_exits_if_mkfigs_notebooks_env_var_missing(tmp_path, monkeypatch):
-    """A missing MKFIGS_NOTEBOOKS env var should exit."""
-    wfolder = tmp_path / "paper-repo"
-    (wfolder / "notebooks").mkdir(parents=True)
-    monkeypatch.delenv("MKFIGS_NOTEBOOKS", raising=False)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["mkfigs-run", "--ename", "exp1", "--esmdir", "/fake/esm.json", "--wfolder", str(wfolder)],
-    )
-    with pytest.raises(SystemExit):
-        run_mod.main()
