@@ -56,12 +56,15 @@ def test_dry_run_writes_nothing_and_never_calls_figshare(patch_repo_paths, fake_
     _seed_notebook_outputs(repo, "test_experiment_01", ["SST", "MLD"])
 
     exp_docs = repo / "documentation" / "docs" / "pages" / "experiments" / "test_experiment_01"
+    # reading in yml and markdown to make sure they don't change ...
     mkdocs_before = (repo / "documentation" / "mkdocs.yml").read_text()
     index_before = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
 
     _run_pushit(["--dry-run"])
 
     assert not exp_docs.exists()  # nothing copied into the docs tree
+
+    #making sure they haven't changed...
     assert (repo / "documentation" / "mkdocs.yml").read_text() == mkdocs_before
     assert (repo / "documentation" / "docs" / "pages" / "index.md").read_text() == index_before
     assert fake_figshare.deleted_file_ids == []
@@ -79,11 +82,18 @@ def test_skip_figshare_copies_docs_but_uploads_nothing(patch_repo_paths, fake_fi
     repo = patch_repo_paths
     _seed_notebook_outputs(repo, "test_experiment_01", ["SST"])
 
+    # this will copy the
+    # SST_rendered.ipynb  ->  notebooks/SST.ipynb  (outputs stripped for git)
+    # mkmd/SST.md  ->  documentation/docs/pages/experiments/test_experiment_01/SST.md
+    # etc
     _run_pushit(["--skip-figshare"])
 
     exp_docs = repo / "documentation" / "docs" / "pages" / "experiments" / "test_experiment_01"
+    #check markdown file created and read in JSON...
     assert (exp_docs / "SST.md").exists()
     urls = json.loads((exp_docs / "notebooks_urls.json").read_text())
+
+    #no figshare data uploaded?
     assert {k: v for k, v in urls.items() if not k.startswith("_")} == {}
     assert fake_figshare._articles == {}  # no article was ever created
 
@@ -121,12 +131,16 @@ def test_full_run_uploads_and_builds_docs_tree(patch_repo_paths, fake_figshare, 
     # pages/index.md has an experiment block for this run
     index_md = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
     assert f"<!-- experiment:{ename} -->" in index_md
+
+    # has added the run log to the landing page
     assert "SST" in index_md and "MLD" in index_md
 
     # rendered notebooks copied back into notebooks/, and nbconvert was
     # invoked to strip outputs from that copy (stubbed, so just check the call)
     assert (repo / "notebooks" / "SST.ipynb").exists()
     nbconvert_calls = [c for c in mock_run.call_args_list if "nbconvert" in c.args[0]]
+    # nbconvert_calls
+    # the mock library keeps a record of what was called, so we can make sure that it was called here for each notebook
     assert len(nbconvert_calls) == 2  # once per successful notebook
 
 
