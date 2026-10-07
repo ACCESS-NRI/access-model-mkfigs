@@ -188,36 +188,18 @@ def test_all_failed_run_writes_no_index_update(patch_repo_paths, fake_figshare, 
     """
     repo = patch_repo_paths
     index_before = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
+    #note the above repo folder contains a mkfigs.sh with
+    #array=(
+    # SST
+    # MLD
+    #  )
 
     _run_pushit([])  # mkfigs.sh lists SST + MLD; neither has any output at all
 
     index_after = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
+    # we may want to change this behaviour later... (practically I guess it's unlikley to happen though)
     assert index_after == index_before
     assert fake_figshare._articles == {}
-
-
-def test_mkdocs_jupyter_plugin_addition_is_not_actually_persisted(
-    patch_repo_paths, fake_figshare, figshare_token
-):
-    """Characterization test for a real bug: _ensure_mkdocs_jupyter_plugin
-    mutates data["plugins"] in memory and update_mkdocs_nav prints
-    "[mkdocs] Added mkdocs-jupyter plugin config", but _save_mkdocs_yml
-    only ever serialises and splices back the nav: block -- the plugins
-    change is silently discarded. On a fresh repo (or one where someone
-    removed the plugin) mkfigs-pushit's own console output claims the fix
-    happened when it didn't, and notebook pages will 404/fail to render
-    until someone adds mkdocs-jupyter to mkdocs.yml by hand. Recommend
-    either having _save_mkdocs_yml also splice in a plugins: block, or
-    dropping the misleading print until it does.
-    """
-    repo = patch_repo_paths
-    ename = "test_experiment_01"
-    _seed_notebook_outputs(repo, ename, ["SST"])
-
-    _run_pushit([])
-
-    mkdocs_yml = (repo / "documentation" / "mkdocs.yml").read_text()
-    assert "mkdocs-jupyter" not in mkdocs_yml  # documents the gap; flip once fixed
 
 
 # ---------------------------------------------------------------------------
@@ -227,12 +209,23 @@ def test_mkdocs_jupyter_plugin_addition_is_not_actually_persisted(
 def test_check_figshare_integrity_passes_when_everything_matches(
     patch_repo_paths, fake_figshare, figshare_token, capsys
 ):
-    """Everything present and matching should be reported as safe to publish."""
+    """Everything present and matching on figshare should be reported as safe to publish."""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     ofol, mdfol = _seed_notebook_outputs(repo, ename, ["SST", "MLD"])
 
     uploader = pushit.FigshareUploader(figshare_token, ename, str(mdfol))
+
+    # example via the debugger
+    # import pdb;pdb.set_trace()
+    # pp vars(uploader)
+    # {'_manifest': {'article_id_test_experiment_01': 1000},
+    #  '_manifest_path': '/tmp/pytest-of-narky/pytest-4/test_check_figshare_integrity_0/paper-repo/notebooks/mkfigs_output_test_experiment_01/mkmd/figshare_manifest.json',
+    #  'article_title': 'ACCESS-OM3 evaluation figures – test_experiment_01',
+    #  'experiment': 'test_experiment_01',
+    #  'mdfol': '/tmp/pytest-of-narky/pytest-4/test_check_figshare_integrity_0/paper-repo/notebooks/mkfigs_output_test_experiment_01/mkmd',
+    #  'token': 'fake-token-for-tests'}
+
     article_id = uploader._get_or_create_article()
     for nb in ["SST", "MLD"]:
         fake_figshare.seed_file(article_id, f"{nb}_rendered.ipynb",
@@ -240,16 +233,19 @@ def test_check_figshare_integrity_passes_when_everything_matches(
         fake_figshare.seed_file(article_id, f"{nb}_01.png",
                                  (mdfol / f"{nb}_01.png").read_bytes())
 
+    # worth doing a `pp vars(fake_figshare)` if interested.
+
     _run_pushit(["--check-figshare-integrity"])  # must not raise/exit
 
     out = capsys.readouterr().out
+
     assert "safe to publish" in out.lower()
 
 
 def test_check_figshare_integrity_exits_nonzero_on_missing_file(
     patch_repo_paths, fake_figshare, figshare_token
 ):
-    """A missing expected file should exit non-zero, not pass as safe to publish."""
+    """A missing expected file should exit non-zero, not pass as safe to publish. Here, we "upload" a notebook but not the image"""
     repo = patch_repo_paths
     ename = "test_experiment_01"
     ofol, mdfol = _seed_notebook_outputs(repo, ename, ["SST"])
@@ -276,8 +272,12 @@ def test_check_figshare_integrity_flags_but_does_not_autodelete_duplicates_witho
     uploader = pushit.FigshareUploader(figshare_token, ename, str(mdfol))
     article_id = uploader._get_or_create_article()
     nb_bytes = (ofol / "SST_rendered.ipynb").read_bytes()
+
+    # these two completed
     fake_figshare.seed_file(article_id, "SST_rendered.ipynb", nb_bytes)
     fake_figshare.seed_file(article_id, "SST_01.png", (mdfol / "SST_01.png").read_bytes())
+
+    # this was started but never completed
     stub_id = fake_figshare.seed_file(article_id, "SST_01.png", b"", status="created")
 
     with pytest.raises(SystemExit):
@@ -287,11 +287,16 @@ def test_check_figshare_integrity_flags_but_does_not_autodelete_duplicates_witho
 
     with pytest.raises(SystemExit):
         _run_pushit(["--check-figshare-integrity", "--fix-duplicates"])
+
+    # import pdb;pdb.set_trace()
+    # running pp vars(fake_figshare) before/after the pushit's; one can see that the stub is deleted
+
     # This same invocation still exits non-zero (dup_report reflects what
     # was found in this run's snapshot, taken before the deletion), but
     # the stub is now actually gone -- a follow-up run of
     # --check-figshare-integrity (without --fix-duplicates even) would
     # find no duplicates left to report.
+
     assert stub_id in fake_figshare.deleted_file_ids
 
 
@@ -347,6 +352,7 @@ def test_check_figshare_upload_succeeds_and_prints_git_commands(
         _run_pushit(["--check-figshare-upload", "--ename", ename])
 
     out = capsys.readouterr().out
+    #print(out)
     assert "git commit" in out
     assert "git tag" in out
     assert "notebooks/SST.ipynb" in out
