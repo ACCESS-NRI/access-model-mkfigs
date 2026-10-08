@@ -38,6 +38,7 @@ dependencies = [
 dev = [
     "coverage",  # testing
     "pytest",  # testing
+    "responses",  # mocks requests.request/.put for the Figshare-API test double in tests/conftest.py
     "ruff"  # linting
     ]
 

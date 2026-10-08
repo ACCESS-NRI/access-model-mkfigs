@@ -5,6 +5,6 @@ tox>=4.0
 coverage>=7.0.0
 Sphinx>=8.0
 twine>=6.0.0
-ruff>=0.9 
+ruff>=0.9
 
 pytest==6.2.4
