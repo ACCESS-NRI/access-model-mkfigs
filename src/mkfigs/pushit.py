@@ -47,6 +47,7 @@ import yaml
 
 from . import get_mkfigs_version
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
+from ._paths import find_notebooks_dir, find_repo_root
 
 
 def _check_nci_environment() -> None:
@@ -62,37 +63,9 @@ def _check_nci_environment() -> None:
         )
 
 
-def _find_notebooks_dir() -> Path:
-    """Find notebooks/ by looking for mkfigs.sh in CWD or an ancestor.
-
-    access-om3-paper-1 has mkfigs.sh directly in notebooks/ (one level);
-    access-cm3-paper-1 has it in notebooks/polished-python/ (two levels).
-    Walk up a few levels rather than hardcoding a fixed depth so both work.
-    """
-    candidate = Path.cwd()
-    for _ in range(4):
-        if (candidate / "mkfigs.sh").exists():
-            return candidate.resolve()
-        if candidate.parent == candidate:
-            break
-        candidate = candidate.parent
-    return Path.cwd()
-
-
-def _find_repo_root(notebooks_dir: Path) -> Path:
-    """Find the paper repo root by walking up from notebooks_dir looking for
-    a stable marker (.git or documentation/mkdocs.yml), rather than assuming
-    notebooks_dir's immediate parent is the repo root -- that assumption
-    breaks for access-cm3-paper-1's notebooks/polished-python/ layout.
-    """
-    candidate = notebooks_dir
-    for _ in range(4):
-        if (candidate / ".git").exists() or (candidate / "documentation" / "mkdocs.yml").exists():
-            return candidate
-        if candidate.parent == candidate:
-            break
-        candidate = candidate.parent
-    return notebooks_dir.parent  # fall back to the old assumption
+# Kept under their old names for existing callers and tests.
+_find_notebooks_dir = find_notebooks_dir
+_find_repo_root = find_repo_root
 
 
 def _load_notebook_issues(notebooks_dir: Path) -> dict[str, str]:

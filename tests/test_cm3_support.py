@@ -194,3 +194,30 @@ def test_run_exports_ename_to_the_notebooks(tmp_path, monkeypatch):
     except SystemExit:
         pass
     assert seen == ["my-exp"]
+# restore: same mkfigs.sh / repo-root detection as pushit
+# ---------------------------------------------------------------------------
+
+def test_restore_finds_docs_tree_for_two_level_notebooks(tmp_path, monkeypatch):
+    """CM3 layout: restore must read the docs tree at the repo root, not notebooks/."""
+    import json
+    from unittest.mock import patch
+
+    from mkfigs import restore
+
+    repo = tmp_path / "cm3"
+    nbdir = _make_repo(repo, ["notebooks", "polished-python"])
+    (nbdir / "mkfigs.sh").write_text("ENAME=exp1\nESMDIR=/fake\n")
+    exp_docs = repo / "documentation" / "docs" / "pages" / "experiments" / "exp1"
+    exp_docs.mkdir(parents=True)
+    (exp_docs / "notebooks_urls.json").write_text(json.dumps({"SST": "https://example/1"}))
+    (exp_docs / "SST.md").write_text("# SST\n")
+
+    monkeypatch.chdir(nbdir)
+    monkeypatch.setattr(restore, "_check_nci_environment", lambda: None)
+    monkeypatch.setattr("sys.argv", ["mkfigs-restore"])
+    with patch("urllib.request.urlretrieve", lambda url, dest: Path(dest).write_text("{}")):
+        restore.main()
+
+    out = nbdir / "mkfigs_output_exp1"
+    assert (out / "SST_rendered.ipynb").exists()
+    assert (out / "mkmd" / "SST.md").read_text() == "# SST\n"

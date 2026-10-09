@@ -10,7 +10,8 @@ from Figshare and copies the summary markdown files from the docs tree, so
 mkfigs-pushit sees them as already-committed notebooks alongside any new ones
 you run.  New or re-run notebooks take priority over the restored versions.
 
-Usage:
+Usage (from the directory containing mkfigs.sh -- notebooks/ for OM3,
+notebooks/polished-python/ for CM3):
     cd /g/data/tm70/.../repos/<paper-repo>/notebooks
     mkfigs-restore
     mkfigs-restore --ename MC_25km_jra_iaf+wombatlite-test3v2-00532b88
@@ -30,6 +31,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
+from ._paths import find_notebooks_dir, find_repo_root
+
 
 def _check_nci_environment() -> None:
     try:
@@ -42,14 +45,6 @@ def _check_nci_environment() -> None:
             "  module use /g/data/xp65/public/modules\n"
             "  module load conda/analysis3\n"
         )
-
-
-def _find_notebooks_dir() -> Path:
-    """Find notebooks/ by looking for mkfigs.sh in CWD or its parent."""
-    for candidate in [Path.cwd(), Path.cwd().parent]:
-        if (candidate / "mkfigs.sh").exists():
-            return candidate.resolve()
-    return Path.cwd()
 
 
 def _parse_ename_from_mkfigs_sh(notebooks_dir: Path) -> str:
@@ -80,8 +75,8 @@ def main() -> None:
                    help="Re-download notebooks even if already present locally")
     args = p.parse_args()
 
-    notebooks_dir = _find_notebooks_dir()
-    repo = notebooks_dir.parent
+    notebooks_dir = find_notebooks_dir()
+    repo = find_repo_root(notebooks_dir)
     docs_pages = repo / "documentation" / "docs" / "pages"
 
     ename = args.ename or _parse_ename_from_mkfigs_sh(notebooks_dir)
