@@ -1,6 +1,7 @@
 """
-Below tests cover rebuilding previously pushed output and the policy
-for preserving or replacing existing local work.
+Restore rebuilds prior output from committed notebook URLs/markdown and
+remote rendered notebooks. Preserve existing local work by default;
+--force explicitly opts into replacing an existing rendered notebook.
 """
 from __future__ import annotations
 
@@ -86,7 +87,8 @@ def test_restore_rebuilds_output_from_committed_content(pushed_experiment, monke
 
 def test_restore_preserves_existing_notebook_by_default(pushed_experiment, monkeypatch):
     """
-    Restore must not overwrite an existing rendered notebook by default
+    Restore any missing notebooks, but keep existing local files intact.
+    users should not lose local work unless they explicitly pass --force.
     """
     notebooks_dir = pushed_experiment / "notebooks"
     ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
