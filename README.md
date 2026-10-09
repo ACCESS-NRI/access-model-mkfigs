@@ -217,13 +217,18 @@ Everyone else then runs `git pull && git submodule update --init --recursive`.
 ## Other models
 
 The defaults are for ACCESS-OM3. Other paper repos set these in `mkfigs.sh`. `pushit` also reads
-the two `export` lines from `mkfigs.sh` on the login node, so there is nothing extra to set there:
+these `export` lines from `mkfigs.sh` on the login node, so there is nothing extra to set there:
 
 | Setting | Purpose | Example (`access-cm3-paper-1`) |
 |---|---|---|
-| `export MKFIGS_MODEL_NAME=...` | Model name in the Figshare article (title, description, keywords) and on each notebook's docs page | `ACCESS-CM3` |
-| `export MKFIGS_REPO_URL=...` | Paper repo link on Figshare | `https://github.com/ACCESS-Community-Hub/access-cm3-paper-1` |
+| `export MKFIGS_MODEL_NAME=...` | Model name in the Figshare article (title, description, keywords), on each notebook's docs page, and in the site's `index.md` heading | `ACCESS-CM3` |
+| `export MKFIGS_REPO_URL=...` | Paper repo link on Figshare and in the site's `index.md` | `https://github.com/ACCESS-Community-Hub/access-cm3-paper-1` |
+| `export MKFIGS_DOCS_URL=...` (optional) | ReadTheDocs site linked in the git tag message. Defaults to `https://<repo-name>.readthedocs.io/` | `https://access-cm3-paper-1.readthedocs.io/` |
 | `--notebooks-subdir DIR` (to `mkfigs.run`) | Notebooks are in `notebooks/DIR/` rather than `notebooks/` | `polished-python` |
+
+`pushit` regenerates the top of `documentation/docs/pages/index.md` (heading, repo link, authors) on
+every run. To keep hand-written text there, such as a list of tracking issues, wrap it in
+`<!-- preamble-extra -->` ... `<!-- /preamble-extra -->` above the `<!-- experiments -->` anchor.
 
 ## Testing
 
