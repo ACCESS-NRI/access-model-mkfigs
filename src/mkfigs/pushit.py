@@ -47,6 +47,7 @@ import yaml
 
 from . import get_mkfigs_version
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
+from .configdoc import get_docs_url, get_model_name, get_repo_slug, get_repo_url
 from ._paths import find_notebooks_dir, find_repo_root
 
 
@@ -129,11 +130,11 @@ DOCS_PAGES = REPO / "documentation" / "docs" / "pages"
 MKDOCS_YML = REPO / "documentation" / "mkdocs.yml"
 
 
-_IDENTITY_VARS = ("MKFIGS_MODEL_NAME", "MKFIGS_REPO_URL")
+_IDENTITY_VARS = ("MKFIGS_MODEL_NAME", "MKFIGS_REPO_URL", "MKFIGS_DOCS_URL")
 
 
 def load_model_identity_from_mkfigs_sh() -> None:
-    """Set MKFIGS_MODEL_NAME / MKFIGS_REPO_URL from mkfigs.sh's export lines, unless already set.
+    """Set MKFIGS_MODEL_NAME / MKFIGS_REPO_URL / MKFIGS_DOCS_URL from mkfigs.sh's export lines, unless already set.
 
     mkfigs.sh only exports them inside the batch job; pushit runs on a login node.
     """
@@ -142,7 +143,7 @@ def load_model_identity_from_mkfigs_sh() -> None:
         return
     found: dict[str, str] = {}
     for line in sh.read_text().splitlines():
-        m = re.match(r'^\s*export\s+(MKFIGS_MODEL_NAME|MKFIGS_REPO_URL)=(?:"([^"]*)"|\'([^\']*)\'|([^\s#]+))', line)
+        m = re.match(r'^\s*export\s+(MKFIGS_MODEL_NAME|MKFIGS_REPO_URL|MKFIGS_DOCS_URL)=(?:"([^"]*)"|\'([^\']*)\'|([^\s#]+))', line)
         if m:
             found[m.group(1)] = next(g for g in m.groups()[1:] if g is not None)
     for var in _IDENTITY_VARS:
@@ -175,11 +176,9 @@ def get_authors_md() -> str:
 
     if not coauthors:
         return ""
-    return (
-        "**authors (alphabetically):** "
-        + "; ".join(sorted(coauthors))
-        + "."
-    )
+    names = "; ".join(sorted(coauthors))
+    # Avoid "Rashid, Harun A.." when the last name ends in an initial.
+    return "**authors (alphabetically):** " + names + ("" if names.endswith(".") else ".")
 
 
 # ---------------------------------------------------------------------------
@@ -446,11 +445,13 @@ def check_figshare_upload_mode(ename: str) -> None:
     today = date.today()
     tag = f"{ename}-{today.strftime('%Y.%m')}.000"
     rtd_slug = re.sub(r'[^a-z0-9-]+', '-', tag.lower()).strip('-')
-    rtd_url  = f"https://access-om3-paper-1.readthedocs.io/en/{rtd_slug}/"
+    rtd_url  = f"{get_docs_url()}en/{rtd_slug}/"
     tag_msg  = f"Evaluation figures for {ename}. Rendered site (after RTD builds tag): {rtd_url}"
 
     urls_json_rel = f"documentation/docs/pages/experiments/{ename}/notebooks_urls.json"
-    added_files = [f"notebooks/{nb}.ipynb" for nb in ok_nbs]
+    # Relative to REPO: notebooks/<nb>.ipynb for access-om3-paper-1,
+    # notebooks/polished-python/<nb>.ipynb for access-cm3-paper-1.
+    added_files = [str((HERE / f"{nb}.ipynb").relative_to(REPO)) for nb in ok_nbs]
     added_files += [
         str((experiment_docs_dir / f"{nb}.md").relative_to(REPO))
         for nb in ok_nbs
@@ -467,7 +468,7 @@ def check_figshare_upload_mode(ename: str) -> None:
     print(f"  cd {REPO}")
     print(f"  git add {' '.join(added_files)}")
     print( "  #")
-    print( "  #  Recommended that you -- git add mkfigs.sh too")
+    print(f"  #  Recommended that you -- git add {(HERE / 'mkfigs.sh').relative_to(REPO)} too")
     print( "  #")
     print(f'  git commit -m "docs: render evaluation figures for {ename}"')
     print(f"  git tag -a {tag} -m '{tag_msg}'")
@@ -821,6 +822,12 @@ def update_mkdocs_nav(ename: str, ok_nbs: list[str], dry_run: bool = False) -> N
 # Top-level pages/index.md update
 # ---------------------------------------------------------------------------
 
+#: Hand-written text between these markers in pages/index.md (above the
+#: <!-- experiments --> anchor) survives the preamble refresh in update_top_index.
+PREAMBLE_EXTRA_START = "<!-- preamble-extra -->"
+PREAMBLE_EXTRA_END = "<!-- /preamble-extra -->"
+
+
 def update_top_index(
     ename: str,
     ok_nbs: list[str],
@@ -843,26 +850,35 @@ def update_top_index(
     top_index = DOCS_PAGES / "index.md"
     top_index.parent.mkdir(parents=True, exist_ok=True)
 
+    # Always refresh the canonical preamble; preserve the experiment blocks
+    # that follow the <!-- experiments --> anchor, plus any hand-written
+    # <!-- preamble-extra --> ... <!-- /preamble-extra --> block above it.
+    anchor = "<!-- experiments -->"
+    old = top_index.read_text() if top_index.exists() else ""
+    after = old[old.index(anchor) + len(anchor):] if anchor in old else ""
+    head = old[:old.index(anchor)] if anchor in old else old
+    extra_m = re.search(
+        re.escape(PREAMBLE_EXTRA_START) + r".*?" + re.escape(PREAMBLE_EXTRA_END),
+        head,
+        flags=re.DOTALL,
+    )
+    extra = extra_m.group(0) + "\n\n" if extra_m else ""
+
+    model = get_model_name()
+    repo_url = get_repo_url()
+    repo_name = repo_url.rsplit("/", 1)[-1]
     preamble = (
-        f"# ACCESS-OM3 Evaluation Figures: {ename}\n\n"
-        "Diagnostic figures from ACCESS-OM3 experiments, generated by the\n"
-        "[access-om3-paper-1](https://github.com/ACCESS-Community-Hub/access-om3-paper-1/)\n"
+        f"# {model} Evaluation Figures: {ename}\n\n"
+        f"Diagnostic figures from {model} experiments, generated by the\n"
+        f"[{repo_name}]({repo_url}/)\n"
         f"analysis notebooks for {ename}. See navigation on the left to browse diagnostics as"
         " delineated by notebook. The website is intended to help users discover and"
         " compare diagnostics. All discussion of the diagnostics occurs on GitHub issues"
         " (see links in Figure captions).\n\n"
-        + (f"`ACCESS-community-Hub/access-om3-paper-1/` {authors_md}\n\n" if authors_md else "")
-        + "<!-- experiments -->\n"
+        + (f"`{get_repo_slug()}/` {authors_md}\n\n" if authors_md else "")
+        + extra
+        + anchor + "\n"
     )
-
-    # Always refresh the canonical preamble; preserve only the experiment blocks
-    # that follow the <!-- experiments --> anchor.
-    anchor = "<!-- experiments -->"
-    if top_index.exists():
-        old = top_index.read_text()
-        after = old[old.index(anchor) + len(anchor):] if anchor in old else ""
-    else:
-        after = ""
     content = preamble + after
 
     incomplete_block = ""
@@ -1131,7 +1147,7 @@ def main() -> None:
     for nb in ok_nbs:
         src = ofol / f"{nb}_rendered.ipynb"
         dst = HERE / f"{nb}.ipynb"
-        print(f"  {src.name}  ->  notebooks/{nb}.ipynb  (outputs stripped for git)")
+        print(f"  {src.name}  ->  {dst.relative_to(REPO)}  (outputs stripped for git)")
         if not args.dry_run:
             shutil.copy2(src, dst)
             subprocess.run(
