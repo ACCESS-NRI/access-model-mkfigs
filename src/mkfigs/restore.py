@@ -13,9 +13,9 @@ you run.  New or re-run notebooks take priority over the restored versions.
 Usage (from the directory containing mkfigs.sh -- notebooks/ for OM3,
 notebooks/polished-python/ for CM3):
     cd /g/data/tm70/.../repos/<paper-repo>/notebooks
-    mkfigs-restore
-    mkfigs-restore --ename MC_25km_jra_iaf+wombatlite-test3v2-00532b88
-    mkfigs-restore --force   # re-download even if already present
+    python3 -m mkfigs.restore
+    python3 -m mkfigs.restore --ename MC_25km_jra_iaf+wombatlite-test3v2-00532b88
+    python3 -m mkfigs.restore --force   # re-download even if already present
 
 After restoring, edit the notebook array in mkfigs.sh to include new/changed
 notebooks, then submit:  qsub mkfigs.sh
@@ -97,7 +97,7 @@ def main() -> None:
         sys.exit(
             f"ERROR: {urls_json} not found.\n"
             "This experiment has not been pushed yet — nothing to restore.\n"
-            "Run mkfigs-pushit first."
+            "Run python3 -m mkfigs.pushit first."
         )
 
     notebook_urls: dict[str, str] = {
