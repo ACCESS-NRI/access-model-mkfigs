@@ -12,6 +12,8 @@ import requests
 from matplotlib import rcParams
 from requests.exceptions import HTTPError
 
+from ._paths import find_repo_root
+
 dpi = 100
 rcParams["figure.dpi"] = dpi
 
@@ -20,6 +22,47 @@ rcParams["figure.dpi"] = dpi
 # ---------------------------------------------------------------------------
 
 FIGSHARE_BASE_URL = "https://api.figshare.com/v2/{endpoint}"
+
+
+# ---------------------------------------------------------------------------
+# Model identity -- the single place the ACCESS-OM3 defaults live.
+#
+# Paper repos for other models (e.g. access-cm3-paper-1) export
+# MKFIGS_MODEL_NAME / MKFIGS_REPO_URL (and optionally MKFIGS_DOCS_URL) in
+# mkfigs.sh; everything user-visible (Figshare metadata, docs pages, the
+# site's index.md, git tag messages) is built from these helpers so that no
+# "OM3" text leaks into another model's outputs.
+# ---------------------------------------------------------------------------
+DEFAULT_MODEL_NAME = "ACCESS-OM3"
+DEFAULT_REPO_URL = "https://github.com/ACCESS-Community-Hub/access-om3-paper-1"
+
+
+def get_model_name() -> str:
+    """Model name, e.g. ``"ACCESS-OM3"`` (default) or ``"ACCESS-CM3"``."""
+    return os.environ.get("MKFIGS_MODEL_NAME") or DEFAULT_MODEL_NAME
+
+
+def get_repo_url() -> str:
+    """Paper repo URL without a trailing slash."""
+    return (os.environ.get("MKFIGS_REPO_URL") or DEFAULT_REPO_URL).rstrip("/")
+
+
+def get_repo_slug() -> str:
+    """``"<owner>/<repo>"`` part of :func:`get_repo_url`."""
+    parts = get_repo_url().split("/")
+    return "/".join(parts[-2:])
+
+
+def get_docs_url() -> str:
+    """ReadTheDocs site root, with a trailing slash.
+
+    ``MKFIGS_DOCS_URL`` if set, else ``https://<repo-name>.readthedocs.io/``
+    (matches both access-om3-paper-1 and access-cm3-paper-1).
+    """
+    url = os.environ.get("MKFIGS_DOCS_URL")
+    if not url:
+        url = f"https://{get_repo_slug().split('/')[-1].lower()}.readthedocs.io/"
+    return url.rstrip("/") + "/"
 
 
 def _figshare_headers(token):
@@ -102,17 +145,43 @@ class FigshareUploader:
         Directory where per-notebook PNGs, markdown files, and the manifest live.
     article_title : str, optional
         Override the figshare article title (defaults to
-        ``"ACCESS-OM3 evaluation figures – <experiment>"``).
+        ``"<model name> evaluation figures – <experiment>"``, where the model
+        name comes from ``MKFIGS_MODEL_NAME``, default ``ACCESS-OM3``).
     """
 
     MANIFEST_FNAME = "figshare_manifest.json"
 
-    def __init__(self, token, experiment, mdfol, article_title=None):
+    #: Fallback model identity, kept for backward compatibility with repos
+    #: that haven't set MKFIGS_MODEL_NAME / MKFIGS_REPO_URL yet.
+    _DEFAULT_MODEL_NAME = DEFAULT_MODEL_NAME
+    _DEFAULT_REPO_URL = DEFAULT_REPO_URL
+
+    def __init__(
+        self,
+        token,
+        experiment,
+        mdfol,
+        article_title=None,
+        model_name=None,
+        repo_url=None,
+    ):
         self.token = token
         self.experiment = experiment
         self.mdfol = mdfol
+
+        self.model_name = (
+            model_name
+            or os.environ.get("MKFIGS_MODEL_NAME")
+            or self._DEFAULT_MODEL_NAME
+        )
+        self.repo_url = (
+            repo_url
+            or os.environ.get("MKFIGS_REPO_URL")
+            or self._DEFAULT_REPO_URL
+        )
+
         self.article_title = article_title or (
-            f"ACCESS-OM3 evaluation figures – {experiment}"
+            f"{self.model_name} evaluation figures – {experiment}"
         )
         self._manifest_path = os.path.join(mdfol, self.MANIFEST_FNAME)
         self._manifest = self._load_manifest()
@@ -221,11 +290,11 @@ class FigshareUploader:
         data = {
             "title": self.article_title,
             "description": (
-                f"Evaluation figures from ACCESS-OM3 experiment {self.experiment}. "
+                f"Evaluation figures from {self.model_name} experiment {self.experiment}. "
                 "Generated automatically by mkfigs.sh / mkfigs_configdoc.py – "
-                "https://github.com/ACCESS-Community-Hub/access-om3-paper-1"
+                f"{self.repo_url}"
             ),
-            "keywords": ["ACCESS-OM3", "ocean model", self.experiment],
+            "keywords": [self.model_name, self.experiment],
             "defined_type": "figure",
         }
         response = _figshare_request("POST", url, self.token, data=data)
@@ -865,17 +934,30 @@ class MkmdWriter:
 
     def __init__(self, esm_file, nbname, cwd, pm=False):
         self.fignum = 1
-        self.experiment = os.path.basename(os.path.dirname(esm_file))
+        # Experiment name used in figure paths (/assets/experiments/<experiment>/...).
+        # mkfigs.run exports MKFIGS_ENAME so it always matches the ENAME that
+        # mkfigs-pushit uploads/rewrites under. Without it, fall back to the datastore's
+        # parent directory -- which is the ENAME for access-om3-paper-1
+        # (<ENAME>/datastore.json) but not for layouts like
+        # <ENAME>/cm3-datastore/cm3-datastore.json.
+        self.experiment = os.environ.get("MKFIGS_ENAME") or os.path.basename(os.path.dirname(esm_file))
         self.nbname = nbname
         self.nb_stem = nbname[:-6] if nbname.endswith(".ipynb") else nbname
         self.cwd = cwd
         self.papermill = pm
         self.mdfol = self.cwd + "mkmd/"
-        # cwd is "<paper-repo>/notebooks/mkfigs_output_<ename>/" (see
-        # mkfigs.run.run_notebook's "-p cwd" papermill param), so its
-        # grandparent is the paper repo root -- the git repo that actually
-        # contains notebooks/<nb_stem>.ipynb and its commit history.
-        self.repo_root = Path(self.cwd).resolve().parent.parent
+        # cwd is "<notebooks dir>/mkfigs_output_<ename>/" (see
+        # mkfigs.run.run_notebook's "-p cwd" papermill param). The notebooks
+        # dir is notebooks/ for access-om3-paper-1 but notebooks/polished-python/
+        # for access-cm3-paper-1, so walk up to the actual repo root rather
+        # than assuming a fixed depth, and record the notebook's path relative
+        # to it for the git-history author lookup.
+        notebooks_dir = Path(self.cwd).resolve().parent
+        self.repo_root = find_repo_root(notebooks_dir)
+        try:
+            self.nb_relpath = str((notebooks_dir / f"{self.nb_stem}.ipynb").relative_to(self.repo_root))
+        except ValueError:
+            self.nb_relpath = f"notebooks/{self.nb_stem}.ipynb"
 
     def savefig(self, figure, title, caption, dpi=dpi):
         """Save figure and append to the per-notebook markdown summary.
@@ -901,6 +983,7 @@ class MkmdWriter:
                 mdfol=self.mdfol,
                 repo_root=self.repo_root,
                 table="",
+                nb_relpath=self.nb_relpath,
             )
             self.fignum += 1
 
@@ -920,6 +1003,7 @@ class MkmdWriter:
                 mdfol=self.mdfol,
                 repo_root=self.repo_root,
                 table=table,
+                nb_relpath=self.nb_relpath,
             )
 
 
@@ -928,13 +1012,14 @@ class MkmdWriter:
 # ---------------------------------------------------------------------------
 
 
-def _mkmd_notebook(title, caption, experiment, nb_stem, plot_fname, mdfol, repo_root, table=""):
+def _mkmd_notebook(title, caption, experiment, nb_stem, plot_fname, mdfol, repo_root, table="", model_name=None, nb_relpath=None):
     """Write (or append) a figure/table entry to ``<mdfol>/<nb_stem>.md``.
 
     Each notebook gets its own markdown file named after the notebook stem
     (e.g. ``SST.md``, ``MLD.md``).  The header is written only on the first
     call; subsequent calls from the same notebook append just the new section.
     """
+    model_name = model_name or get_model_name()
     try:
         os.makedirs(mdfol, exist_ok=True)
     except OSError as e:
@@ -982,14 +1067,14 @@ def _mkmd_notebook(title, caption, experiment, nb_stem, plot_fname, mdfol, repo_
         ]
 
     if first_write:
-        _authors = get_notebook_authors(nb_stem, repo_root)
+        _authors = get_notebook_authors(nb_stem, repo_root, nb_relpath=nb_relpath)
         _authors_str = ", ".join(_authors) if _authors else "unknown"
         header = [
             "<!-- auto-generated by mkfigs_configdoc.py – do not edit manually -->\n",
             f"# {nb_stem}\n",
             " \n",
             (
-                f"Evaluation figures from ACCESS-OM3 experiment **{experiment}**"
+                f"Evaluation figures from {model_name} experiment **{experiment}**"
                 f" produced by notebook `{nb_stem}.ipynb`."
                 f" Co-authors for this notebook (via Git history): {_authors_str}."
                 f" [View rendered notebook](notebooks/{nb_stem}.ipynb)\n"
@@ -1061,15 +1146,18 @@ def getauthors(file_path="../CITATION.cff"):
     )
 
 
-def get_notebook_authors(nb_stem, repo_root):
+def get_notebook_authors(nb_stem, repo_root, nb_relpath=None):
     """Return authors for a notebook from git history.
 
     First commit author (notebook creator) is listed first; remaining authors
     sorted by number of commits (proxy for lines contributed), descending.
+
+    ``nb_relpath`` is the notebook's path relative to ``repo_root``; defaults
+    to ``notebooks/<nb_stem>.ipynb`` (the access-om3-paper-1 layout).
     """
     import subprocess
     from collections import Counter
-    nb_path = f"notebooks/{nb_stem}.ipynb"
+    nb_path = nb_relpath or f"notebooks/{nb_stem}.ipynb"
     try:
         result = subprocess.run(
             ["git", "log", "--follow", "--format=%an", "--", nb_path],
