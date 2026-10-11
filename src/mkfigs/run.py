@@ -10,8 +10,9 @@ WFOLDER as command-line arguments.
 Usage (via mkfigs.sh):
     qsub mkfigs.sh
 
-After the job completes, run mkfigs-pushit on a login node to upload figures
-to Figshare and prepare the git commit.
+After the job completes, run `python3 -m mkfigs.pushit` on a login node (from
+the directory containing mkfigs.sh) to upload figures to Figshare and prepare
+the git commit. The exact commands are printed at the end of the job.
 """
 
 from __future__ import annotations
@@ -211,29 +212,32 @@ def main() -> None:
                 ef.write("\n")
         log.error("Error details: %s", errors_log)
 
-    venv = notebooks_dir / f"mkfigs_output_{ename}" / "venv"
+    _print_next_steps(Path(args.wfolder), notebooks_dir)
+
+def _print_next_steps(wfolder: Path, notebooks_dir: Path) -> None:
+    """Print the login-node commands to run after the batch job."""
+    wfolder, notebooks_dir = wfolder.resolve(), notebooks_dir.resolve()
+    mkfigs_src = wfolder / "external" / "access-model-mkfigs" / "src"
     sep = "=" * 56
-    print()
-    print(sep)
-    print("Run complete — next steps on a login node:")
-    print(sep)
-    print()
-    print("  # 1. Load the environment and activate the venv")
-    print("  module purge")
-    print("  module use /g/data/xp65/public/modules")
-    print("  module load conda/analysis3")
-    print(f"  source {venv}/bin/activate")
-    print()
-    print("  # 2. Dry-run first to review what will be committed")
-    print(f"  mkfigs-pushit --ename {ename} --dry-run")
-    print()
-    print("  # 3. Push figures to Figshare and prepare the git commit")
-    print(f"  mkfigs-pushit --ename {ename}")
-    print()
-    print("  # 4. Log in to Figshare and publish the article, then verify")
-    print(f"  mkfigs-pushit --ename {ename} --check-figshare-upload")
-    print(sep)
-    print()
+    lines = [
+        "", sep, "Run complete — next steps on a login node:", sep, "",
+        "  module purge",
+        "  module use /g/data/xp65/public/modules",
+        "  module load conda/analysis3",
+    ]
+    if mkfigs_src.is_dir():
+        lines.append(f'  export PYTHONPATH="{mkfigs_src}:${{PYTHONPATH}}"')
+    lines += [
+        f"  cd {notebooks_dir}",
+        "",
+        "  python3 -m mkfigs.pushit --dry-run                   # optional preview",
+        "  python3 -m mkfigs.pushit",
+        "  python3 -m mkfigs.pushit --check-figshare-integrity  # optional, before publishing",
+        "  # log in to Figshare and publish the article, then:",
+        "  python3 -m mkfigs.pushit --check-figshare-upload",
+        sep, "",
+    ]
+    print("\n".join(lines))
 
 
 if __name__ == "__main__":

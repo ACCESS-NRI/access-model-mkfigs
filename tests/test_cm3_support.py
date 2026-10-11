@@ -221,3 +221,21 @@ def test_restore_finds_docs_tree_for_two_level_notebooks(tmp_path, monkeypatch):
     out = nbdir / "mkfigs_output_exp1"
     assert (out / "SST_rendered.ipynb").exists()
     assert (out / "mkmd" / "SST.md").read_text() == "# SST\n"
+
+
+# ---------------------------------------------------------------------------
+# run: end-of-job instructions point at the right directory
+# ---------------------------------------------------------------------------
+
+def test_run_next_steps_cd_into_notebooks_subdir(tmp_path, monkeypatch, capsys):
+    wfolder = tmp_path / "cm3-repo"
+    (wfolder / "notebooks" / "polished-python").mkdir(parents=True)
+    (wfolder / "external" / "access-model-mkfigs" / "src").mkdir(parents=True)
+
+    _drive_run_main(monkeypatch, wfolder, ["--notebooks-subdir", "polished-python"])
+
+    out = capsys.readouterr().out
+    assert f"cd {wfolder / 'notebooks' / 'polished-python'}" in out
+    assert f"{wfolder / 'external' / 'access-model-mkfigs' / 'src'}" in out
+    assert "python3 -m mkfigs.pushit --check-figshare-upload" in out
+    assert "venv" not in out
