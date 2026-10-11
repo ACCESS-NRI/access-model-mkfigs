@@ -68,7 +68,7 @@ All `python3 -m mkfigs.*` commands must be run **from the `mkfigs.sh` directory*
 ```bash
 module purge
 module use /g/data/xp65/public/modules
-module load conda/analysis3
+module load conda/analysis3        # use the same module as in mkfigs.sh (the CM3 paper repo pins conda/analysis3-26.08)
 cd /g/data/$PROJECT/$USER/access-om3-paper-1/notebooks
 # cd /g/data/$PROJECT/$USER/access-cm3-paper-1/notebooks/polished-python
 export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs/src:${PYTHONPATH}"
@@ -82,18 +82,45 @@ export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs
 2. Make sure the experiment's storage project is in the `#PBS -l storage=` line.
 3. Optional (OM3): `python3 check_mkfigs_issues.py` checks every notebook in the array exists and has
    a GitHub issue in `mkfigs_issues.py`.
-4. Run and upload:
+4. Check, run, and look at what happened:
 
    ```bash
-   qsub mkfigs.sh
-   # when the job finishes, in the login-node environment above:
+   git submodule status        # must start with a space; a leading "-" means: git submodule update --init
+   cd notebooks                # the directory that contains mkfigs.sh (CM3: notebooks/polished-python)
+   qsub mkfigs.sh              # submit from this directory: mkfigs.sh finds the repo root from here
+   ```
+
+   **The job exits 0 even if some notebooks failed**, so read the results. The log files are in
+   `mkfigs_output_<ENAME>/mkmd/` (not next to the notebooks):
+
+   ```bash
+   grep -hE "Succeeded|FAILED" mkfigs.sh.o*     # which notebooks passed and which failed
+   grep -A2 '^FAILED:' mkfigs_output_*/mkmd/mkfigs_errors.log | grep -v '^===\|^--'   # the error for each
+   ```
+
+   Every notebook gets a `*_rendered.ipynb` in `mkfigs_output_<ENAME>/`, **including failed ones**, so
+   its presence does not mean it worked. (`mkfigs.sh.e*` is mostly a `set -x` trace plus Dask shutdown
+   noise; `mkfigs_errors.log` and the `.o` summary are what to read.)
+
+5. Upload (in the login-node environment above):
+
+   ```bash
    python3 -m mkfigs.pushit --dry-run                    # optional preview, changes nothing
    python3 -m mkfigs.pushit
    python3 -m mkfigs.pushit --check-figshare-integrity   # optional, before publishing
    ```
 
-5. Log in to Figshare and publish the article.
-6. `python3 -m mkfigs.pushit --check-figshare-upload`, then run the `git` commands it prints. These
+   The `--dry-run` table lists each notebook in the `array`:
+
+   | Status | Meaning |
+   |---|---|
+   | `OK (n PNGs)` | ran and produced figures; will be uploaded |
+   | `FAILED (no PNGs or markdown)` | errored (see `mkfigs_errors.log`) **or** ran but saved no figures |
+   | `NOT RUN` | in the `array` but no output from this run |
+   | `PREV COMMITTED` | not in this run; kept from the last published version |
+
+6. Log in to Figshare and publish the article.
+7. `python3 -m mkfigs.pushit --check-figshare-upload`, then run the `git` commands it prints. These
    commit the docs pages and create a tag named `<ENAME>-YYYY.MM.NNN`.
 
 ## Workflow: add or re-run notebooks for an existing experiment
