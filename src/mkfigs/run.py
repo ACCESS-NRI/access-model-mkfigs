@@ -146,6 +146,9 @@ def main() -> None:
 
     ename  = args.ename
     esmdir = args.esmdir
+    # Notebooks name their figure paths after the experiment (MkmdWriter); make
+    # that the ENAME mkfigs-pushit will upload under, whatever the datastore path looks like.
+    os.environ["MKFIGS_ENAME"] = ename
     notebooks_dir = Path(args.wfolder) / "notebooks" / args.notebooks_subdir
 
     ofol  = notebooks_dir / f"mkfigs_output_{ename}"

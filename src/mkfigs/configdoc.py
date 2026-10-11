@@ -890,7 +890,13 @@ class MkmdWriter:
 
     def __init__(self, esm_file, nbname, cwd, pm=False):
         self.fignum = 1
-        self.experiment = os.path.basename(os.path.dirname(esm_file))
+        # Experiment name used in figure paths (/assets/experiments/<experiment>/...).
+        # mkfigs.run exports MKFIGS_ENAME so it always matches the ENAME that
+        # mkfigs-pushit uploads/rewrites under. Without it, fall back to the datastore's
+        # parent directory -- which is the ENAME for access-om3-paper-1
+        # (<ENAME>/datastore.json) but not for layouts like
+        # <ENAME>/cm3-datastore/cm3-datastore.json.
+        self.experiment = os.environ.get("MKFIGS_ENAME") or os.path.basename(os.path.dirname(esm_file))
         self.nbname = nbname
         self.nb_stem = nbname[:-6] if nbname.endswith(".ipynb") else nbname
         self.cwd = cwd

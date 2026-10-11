@@ -149,3 +149,48 @@ def test_created_article_is_titled_with_the_model(fake_figshare, tmp_path, monke
     article_id = up._get_or_create_article()
 
     assert fake_figshare._articles[article_id]["title"] == "ACCESS-CM3 evaluation figures – exp1"
+
+
+# ---------------------------------------------------------------------------
+# Experiment name in figure paths = ENAME, not the datastore's parent directory
+# ---------------------------------------------------------------------------
+# MkmdWriter writes /assets/experiments/<experiment>/<png> into the .md files and
+# mkfigs-pushit rewrites exactly that prefix (with <experiment> = ENAME) to Figshare
+# URLs / local paths. If the two differ, links silently stay dead.
+
+CM3_ESM = "/g/data/x/ACCESS-CM3/cm3-run-1/cm3-datastore/cm3-datastore.json"
+OM3_ESM = "/g/data/x/access-om3-25km/MC_25km_run/datastore.json"
+
+
+def test_mkmd_experiment_falls_back_to_datastore_parent_dir(monkeypatch):
+    """access-om3-paper-1 layout (<ENAME>/datastore.json): unchanged."""
+    from mkfigs.configdoc import MkmdWriter
+    monkeypatch.delenv("MKFIGS_ENAME", raising=False)
+    assert MkmdWriter(OM3_ESM, "SST.ipynb", "/tmp/x/").experiment == "MC_25km_run"
+
+
+def test_mkmd_experiment_uses_ename_when_exported(monkeypatch):
+    """CM3 layout: the datastore's parent dir is 'cm3-datastore' for every run."""
+    from mkfigs.configdoc import MkmdWriter
+    monkeypatch.delenv("MKFIGS_ENAME", raising=False)
+    assert MkmdWriter(CM3_ESM, "SST.ipynb", "/tmp/x/").experiment == "cm3-datastore"  # the trap
+    monkeypatch.setenv("MKFIGS_ENAME", "cm3-run-1")
+    assert MkmdWriter(CM3_ESM, "SST.ipynb", "/tmp/x/").experiment == "cm3-run-1"
+
+
+def test_run_exports_ename_to_the_notebooks(tmp_path, monkeypatch):
+    monkeypatch.delenv("MKFIGS_ENAME", raising=False)
+    wfolder = tmp_path / "repo"
+    (wfolder / "notebooks").mkdir(parents=True)
+    seen = []
+    monkeypatch.setenv("MKFIGS_NOTEBOOKS", "SST")
+    monkeypatch.setattr("sys.argv", ["mkfigs-run", "--ename", "my-exp", "--esmdir", CM3_ESM,
+                                     "--wfolder", str(wfolder)])
+    import os
+    monkeypatch.setattr(run_mod, "run_notebook",
+                        lambda nb, esm, ofol, nbdir: seen.append(os.environ.get("MKFIGS_ENAME")) or True)
+    try:
+        run_mod.main()
+    except SystemExit:
+        pass
+    assert seen == ["my-exp"]
