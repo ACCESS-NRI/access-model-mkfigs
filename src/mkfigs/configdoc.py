@@ -107,12 +107,37 @@ class FigshareUploader:
 
     MANIFEST_FNAME = "figshare_manifest.json"
 
-    def __init__(self, token, experiment, mdfol, article_title=None):
+    #: Fallback model identity, kept for backward compatibility with repos
+    #: that haven't set MKFIGS_MODEL_NAME / MKFIGS_REPO_URL yet.
+    _DEFAULT_MODEL_NAME = "ACCESS-OM3"
+    _DEFAULT_REPO_URL = "https://github.com/ACCESS-Community-Hub/access-om3-paper-1"
+
+    def __init__(
+        self,
+        token,
+        experiment,
+        mdfol,
+        article_title=None,
+        model_name=None,
+        repo_url=None,
+    ):
         self.token = token
         self.experiment = experiment
         self.mdfol = mdfol
+
+        self.model_name = (
+            model_name
+            or os.environ.get("MKFIGS_MODEL_NAME")
+            or self._DEFAULT_MODEL_NAME
+        )
+        self.repo_url = (
+            repo_url
+            or os.environ.get("MKFIGS_REPO_URL")
+            or self._DEFAULT_REPO_URL
+        )
+
         self.article_title = article_title or (
-            f"ACCESS-OM3 evaluation figures – {experiment}"
+            f"{self.model_name} evaluation figures – {experiment}"
         )
         self._manifest_path = os.path.join(mdfol, self.MANIFEST_FNAME)
         self._manifest = self._load_manifest()
@@ -221,11 +246,11 @@ class FigshareUploader:
         data = {
             "title": self.article_title,
             "description": (
-                f"Evaluation figures from ACCESS-OM3 experiment {self.experiment}. "
+                f"Evaluation figures from {self.model_name} experiment {self.experiment}. "
                 "Generated automatically by mkfigs.sh / mkfigs_configdoc.py – "
-                "https://github.com/ACCESS-Community-Hub/access-om3-paper-1"
+                f"{self.repo_url}"
             ),
-            "keywords": ["ACCESS-OM3", "ocean model", self.experiment],
+            "keywords": [self.model_name, self.experiment],
             "defined_type": "figure",
         }
         response = _figshare_request("POST", url, self.token, data=data)
@@ -928,7 +953,8 @@ class MkmdWriter:
 # ---------------------------------------------------------------------------
 
 
-def _mkmd_notebook(title, caption, experiment, nb_stem, plot_fname, mdfol, repo_root, table=""):
+def _mkmd_notebook(title, caption, experiment, nb_stem, plot_fname, mdfol, repo_root, table="", model_name=None):
+    model_name = model_name or os.environ.get("MKFIGS_MODEL_NAME", "ACCESS-OM3")
     """Write (or append) a figure/table entry to ``<mdfol>/<nb_stem>.md``.
 
     Each notebook gets its own markdown file named after the notebook stem
@@ -989,7 +1015,7 @@ def _mkmd_notebook(title, caption, experiment, nb_stem, plot_fname, mdfol, repo_
             f"# {nb_stem}\n",
             " \n",
             (
-                f"Evaluation figures from ACCESS-OM3 experiment **{experiment}**"
+                f"Evaluation figures from {model_name} experiment **{experiment}**"
                 f" produced by notebook `{nb_stem}.ipynb`."
                 f" Co-authors for this notebook (via Git history): {_authors_str}."
                 f" [View rendered notebook](notebooks/{nb_stem}.ipynb)\n"
