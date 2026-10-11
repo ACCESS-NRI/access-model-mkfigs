@@ -127,6 +127,27 @@ HERE = _find_notebooks_dir()
 REPO = _find_repo_root(HERE)
 DOCS_PAGES = REPO / "documentation" / "docs" / "pages"
 MKDOCS_YML = REPO / "documentation" / "mkdocs.yml"
+
+
+_IDENTITY_VARS = ("MKFIGS_MODEL_NAME", "MKFIGS_REPO_URL")
+
+
+def load_model_identity_from_mkfigs_sh() -> None:
+    """Set MKFIGS_MODEL_NAME / MKFIGS_REPO_URL from mkfigs.sh's export lines, unless already set.
+
+    mkfigs.sh only exports them inside the batch job; pushit runs on a login node.
+    """
+    sh = HERE / "mkfigs.sh"
+    if not sh.exists():
+        return
+    found: dict[str, str] = {}
+    for line in sh.read_text().splitlines():
+        m = re.match(r'^\s*export\s+(MKFIGS_MODEL_NAME|MKFIGS_REPO_URL)=(?:"([^"]*)"|\'([^\']*)\'|([^\s#]+))', line)
+        if m:
+            found[m.group(1)] = next(g for g in m.groups()[1:] if g is not None)
+    for var in _IDENTITY_VARS:
+        if var in found:
+            os.environ.setdefault(var, found[var])
 # ---------------------------------------------------------------------------
 # Author list from CITATION.cff
 # ---------------------------------------------------------------------------
@@ -920,6 +941,7 @@ def main() -> None:
                         "matching the local file). Without this, reported but not deleted. "
                         "Ambiguous duplicates are never auto-deleted regardless of this flag.")
     args = p.parse_args()
+    load_model_identity_from_mkfigs_sh()
 
     mkfigs_version = get_mkfigs_version()
     print(f"[mkfigs] Running from commit {mkfigs_version}")

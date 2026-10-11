@@ -239,3 +239,45 @@ def test_run_next_steps_cd_into_notebooks_subdir(tmp_path, monkeypatch, capsys):
     assert f"{wfolder / 'external' / 'access-model-mkfigs' / 'src'}" in out
     assert "python3 -m mkfigs.pushit --check-figshare-upload" in out
     assert "venv" not in out
+
+
+# ---------------------------------------------------------------------------
+# pushit: model identity from mkfigs.sh (pushit runs outside the batch job)
+# ---------------------------------------------------------------------------
+
+def test_pushit_reads_model_identity_from_mkfigs_sh(tmp_path, monkeypatch):
+    monkeypatch.delenv("MKFIGS_MODEL_NAME", raising=False)
+    monkeypatch.delenv("MKFIGS_REPO_URL", raising=False)
+    (tmp_path / "mkfigs.sh").write_text(
+        '# export MKFIGS_MODEL_NAME="ignored"\n'
+        'export MKFIGS_MODEL_NAME="ACCESS-CM3"\n'
+        "export MKFIGS_REPO_URL=https://github.com/ACCESS-Community-Hub/access-cm3-paper-1\n"
+    )
+    monkeypatch.setattr(pushit, "HERE", tmp_path)
+
+    pushit.load_model_identity_from_mkfigs_sh()
+
+    up = _uploader(tmp_path)
+    assert up.model_name == "ACCESS-CM3"
+    assert up.repo_url.endswith("access-cm3-paper-1")
+
+
+def test_pushit_model_identity_env_beats_mkfigs_sh(tmp_path, monkeypatch):
+    monkeypatch.setenv("MKFIGS_MODEL_NAME", "FROM-ENV")
+    (tmp_path / "mkfigs.sh").write_text('export MKFIGS_MODEL_NAME="ACCESS-CM3"\n')
+    monkeypatch.setattr(pushit, "HERE", tmp_path)
+
+    pushit.load_model_identity_from_mkfigs_sh()
+
+    assert _uploader(tmp_path).model_name == "FROM-ENV"
+
+
+def test_pushit_model_identity_unset_for_om3_mkfigs_sh(tmp_path, monkeypatch):
+    """OM3's mkfigs.sh has no export lines: default identity unchanged."""
+    monkeypatch.delenv("MKFIGS_MODEL_NAME", raising=False)
+    (tmp_path / "mkfigs.sh").write_text("ENAME=x\nESMDIR=/y\n")
+    monkeypatch.setattr(pushit, "HERE", tmp_path)
+
+    pushit.load_model_identity_from_mkfigs_sh()
+
+    assert _uploader(tmp_path).model_name == "ACCESS-OM3"
