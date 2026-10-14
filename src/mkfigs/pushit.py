@@ -70,15 +70,36 @@ def _find_notebooks_dir() -> Path:
     return Path.cwd()
 
 
-def _load_notebook_issues(notebooks_dir: Path) -> dict[str, str]:
-    """Load ISSUES dict from mkfigs_issues.py in the paper repo's notebooks/ dir."""
+def _load_mkfigs_issues_module(notebooks_dir: Path):
+    """Import mkfigs_issues.py from the paper repo's notebooks/ dir (or None)."""
     issues_file = notebooks_dir / "mkfigs_issues.py"
     if not issues_file.exists():
-        return {}
+        return None
     spec = importlib.util.spec_from_file_location("mkfigs_issues", issues_file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return getattr(mod, "ISSUES", {})
+    return mod
+
+
+def _load_notebook_issues(notebooks_dir: Path) -> dict[str, str]:
+    """Load ISSUES dict from mkfigs_issues.py in the paper repo's notebooks/ dir."""
+    return getattr(_load_mkfigs_issues_module(notebooks_dir), "ISSUES", {})
+
+
+def _load_notebook_categories(notebooks_dir: Path) -> dict[str, list[int | str]]:
+    """Load the optional CATEGORIES dict from mkfigs_issues.py.
+
+    CATEGORIES maps a landing-page section heading to a list of GitHub issue
+    numbers (int) and/or notebook stems (str). See group_notebooks_by_category.
+    Returns {} when absent, in which case the landing page keeps a single
+    flat table.
+    """
+    return getattr(_load_mkfigs_issues_module(notebooks_dir), "CATEGORIES", {})
+
+
+def _load_categories_source(notebooks_dir: Path) -> str | None:
+    """Load the optional CATEGORIES_SOURCE URL (the issue the categories mirror)."""
+    return getattr(_load_mkfigs_issues_module(notebooks_dir), "CATEGORIES_SOURCE", None)
 
 
 def parse_mkfigs_sh() -> tuple[str, str, list[str]]:
@@ -166,6 +187,62 @@ def get_authors_md() -> str:
 # ---------------------------------------------------------------------------
 # Run-summary builder (shared between stdout and index.md)
 # ---------------------------------------------------------------------------
+STATUS_HEADER = "Notebook run success?"
+UNCATEGORISED = "Miscellaneous"
+_ISSUE_NUM_RE = re.compile(r"/issues/(\d+)\b")
+
+
+def _category_anchor(name: str) -> str:
+    """Stable HTML id for a category heading, e.g. 'cat-sea-ice'."""
+    return "cat-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def category_candidates(
+    nb: str,
+    notebook_issues: dict[str, str],
+    categories: dict[str, list[int | str]],
+) -> tuple[str | None, list[str]]:
+    """Return (pinned_category, issue_matched_categories) for one notebook.
+
+    *pinned_category* is the first category that lists the notebook stem
+    itself; *issue_matched_categories* are those listing any issue number
+    linked from the notebook's ISSUES entry (``.../issues/<N>``).
+    """
+    nums = {int(n) for n in _ISSUE_NUM_RE.findall(notebook_issues.get(nb, ""))}
+    pinned = next((c for c, m in categories.items() if nb in m), None)
+    by_issue = [c for c, m in categories.items() if nums & {x for x in m if isinstance(x, int)}]
+    return pinned, by_issue
+
+
+def group_notebooks_by_category(
+    notebooks: list[str],
+    notebook_issues: dict[str, str],
+    categories: dict[str, list[int | str]],
+    warn: bool = False,
+) -> dict[str, list[str]]:
+    """Put each notebook in exactly one landing-page section.
+
+    A notebook goes to the category that lists its stem; otherwise to the
+    first category (in CATEGORIES order) listing one of its issue numbers;
+    otherwise to UNCATEGORISED ("Miscellaneous"), which comes last. A
+    CATEGORIES entry named "Miscellaneous" can pin notebooks there even when
+    their issues match another category. With
+    *warn*, notebooks whose issues match several categories, and that are not
+    pinned by stem, are reported so the choice can be made explicit.
+
+    Returns an ordered {category: [notebook, ...]} with empty categories
+    dropped; notebook order follows *notebooks*.
+    """
+    grouped: dict[str, list[str]] = {c: [] for c in [*categories, UNCATEGORISED]}
+    for nb in notebooks:
+        pinned, by_issue = category_candidates(nb, notebook_issues, categories)
+        if warn and not pinned and len(by_issue) > 1:
+            print(f"[categories] {nb} matches {', '.join(by_issue)}; using '{by_issue[0]}'. "
+                  "List its name under one category in CATEGORIES to choose.")
+        grouped[pinned or (by_issue[0] if by_issue else UNCATEGORISED)].append(nb)
+    return {c: nbs for c, nbs in grouped.items() if nbs}
+
+
 def build_run_summary(
     ename: str,
     esmdir: str,
@@ -178,11 +255,16 @@ def build_run_summary(
     existing_run_times: dict[str, str] | None = None,
     mkfigs_version: str = "unknown",
     existing_run_versions: dict[str, str] | None = None,
+    categories: dict[str, list[int | str]] | None = None,
 ) -> tuple[str, str]:
     """Return (plain_text_summary, markdown_summary).
 
     ``notebook_issues`` maps notebook stem to a Markdown GitHub issue string,
     loaded from mkfigs_issues.py in the paper repo's notebooks/ directory.
+
+    ``categories`` (optional, CATEGORIES in mkfigs_issues.py) splits the
+    notebook table into one sub-headed table per category, with a "Jump to"
+    line above them. Without it a single flat table is produced.
 
     Both contain the same information; the markdown version uses a table and
     bullet list suitable for embedding directly in pages/index.md.
@@ -208,14 +290,47 @@ def build_run_summary(
 
     # Markdown for pages/index.md — links included in table so no separate Sections block needed
     exp_dir = f"experiments/{ename}"
-    md_rows = (
-        [f"| `{nb}` | ✅ OK | {notebook_issues.get(nb, '')} | [Summary Figures]({exp_dir}/{nb}.md) · [Full Notebook]({exp_dir}/notebooks/{nb}/) |"
-         for nb in ok_nbs]
-        + [f"| `{nb}` | ❌ FAILED | {notebook_issues.get(nb, '')} | |"  for nb in failed_nbs]
-        + [f"| `{nb}` | ⏭ NOT RUN | {notebook_issues.get(nb, '')} | |" for nb in not_run_nbs]
-        + [f"| `{nb}` | ✅ Previously committed | {notebook_issues.get(nb, '')} | [Summary Figures]({exp_dir}/{nb}.md) · [Full Notebook]({exp_dir}/notebooks/{nb}/) |"
-           for nb in prev_committed_nbs]
-    )
+
+    def _links(nb: str) -> str:
+        return f"[Figures]({exp_dir}/{nb}.md)&nbsp;·&nbsp;[Notebook]({exp_dir}/notebooks/{nb}/)"  # nbsp: keep on one line
+
+    _status: dict[str, tuple[str, str]] = {}   # nb -> (run-success label, links cell)
+    for nb in ok_nbs:
+        _status[nb] = ("✅ Yes", _links(nb))
+    for nb in prev_committed_nbs:
+        _status[nb] = ("✅ Yes (earlier run)", _links(nb))
+    for nb in failed_nbs:
+        _status[nb] = ("❌ No", "")
+    for nb in not_run_nbs:
+        _status[nb] = ("⏭ Not run", "")
+    all_nbs = ok_nbs + prev_committed_nbs + failed_nbs + not_run_nbs
+    if categories:
+        # Stable order across runs: alphabetical within each category table.
+        all_nbs = sorted(all_nbs, key=str.lower)
+
+    def _table(nbs: list[str]) -> str:
+        return (
+            f"| Notebook | {STATUS_HEADER} | GitHub Issue(s) | Links |\n"
+            "|---|---|---|---|\n"
+            + "\n".join(
+                f"| `{nb}` | {_status[nb][0]} | {notebook_issues.get(nb, '')} | {_status[nb][1]} |"
+                for nb in nbs
+            )
+            + "\n"
+        )
+
+    if categories:
+        grouped = group_notebooks_by_category(all_nbs, notebook_issues, categories, warn=True)
+        jump = " · ".join(
+            f"[{cat}](#{_category_anchor(cat)}) ({len(nbs)})" for cat, nbs in grouped.items()
+        )
+        tables_md = f"**Jump to:** {jump}\n\n" + "\n".join(
+            f"### {cat} {{#{_category_anchor(cat)}}}\n\n{_table(nbs)}"
+            for cat, nbs in grouped.items()
+        )
+    else:
+        tables_md = _table(all_nbs)
+
     # Build per-notebook (date, version) lookup then group into table rows.
     _nb_times: dict[str, str] = {nb: ts for nb in ok_nbs}
     _nb_versions: dict[str, str] = {nb: mkfigs_version for nb in ok_nbs}
@@ -237,10 +352,8 @@ def build_run_summary(
     )
 
     md = (
-        "| Notebook | Status | GitHub Issue(s) | Links |\n"
-        "|---|---|---|---|\n"
-        + "\n".join(md_rows)
-        + f"\n\n- **ESM datastore:** `{esmdir}`\n\n"
+        tables_md
+        + f"\n- **ESM datastore:** `{esmdir}`\n\n"
         + run_time_md
     )
 
@@ -754,6 +867,9 @@ def update_mkdocs_nav(ename: str, ok_nbs: list[str], dry_run: bool = False) -> N
     summary .md (the hide_pages hook strips 'pages/' from both, so same-stem
     files in the same dir would resolve to the same URL).
 
+    Entries are sorted alphabetically (case-insensitive), so a notebook sits in
+    the same place in the nav whichever subset of notebooks a run includes.
+
     Existing entries for the same notebook name are replaced in-place.
     The mkdocs-jupyter plugin is injected into the plugins list if absent.
     """
@@ -780,8 +896,8 @@ def update_mkdocs_nav(ename: str, ok_nbs: list[str], dry_run: bool = False) -> N
     # Remove all stale experiment entries (old structure or previous runs).
     nav = [item for item in nav if not (isinstance(item, dict) and _is_experiment_entry(item))]
 
-    # Append fresh entries in notebook order.
-    for nb in ok_nbs:
+    # Append fresh entries in a stable, alphabetical order.
+    for nb in sorted(ok_nbs, key=str.lower):
         nav.append({nb: [
             {"Summary":  f"{exp_dir}/{nb}.md"},
             {"Notebook": f"{exp_dir}/notebooks/{nb}.ipynb"},
@@ -811,8 +927,14 @@ def update_top_index(
     authors_md: str,
     figshare_url: str | None = None,
     dry_run: bool = False,
+    categorised: bool = False,
+    categories_source: str | None = None,
 ) -> None:
     """Append or replace an experiment block in the top-level pages/index.md.
+
+    With *categorised*, the intro points readers at the category tables
+    (linking *categories_source*, e.g. the tracking issue, when given)
+    instead of at the left-hand navigation.
 
     Each block contains everything a reader needs for an experiment: the author
     list, run summary table, and links to every section page.  There is no
@@ -824,12 +946,22 @@ def update_top_index(
     top_index = DOCS_PAGES / "index.md"
     top_index.parent.mkdir(parents=True, exist_ok=True)
 
+    if categorised and categories_source:
+        m = re.search(r"/issues/(\d+)", categories_source)
+        label = f"issue #{m.group(1)}" if m else "this list"
+        browse = (f"Diagnostics are grouped below by category, following [{label}]({categories_source});"
+                  " the navigation on the left lists every notebook alphabetically.")
+    elif categorised:
+        browse = ("Diagnostics are grouped below by category;"
+                  " the navigation on the left lists every notebook alphabetically.")
+    else:
+        browse = "See navigation on the left to browse diagnostics as delineated by notebook."
     preamble = (
         f"# ACCESS-OM3 Evaluation Figures: {ename}\n\n"
         "Diagnostic figures from ACCESS-OM3 experiments, generated by the\n"
         "[access-om3-paper-1](https://github.com/ACCESS-Community-Hub/access-om3-paper-1/)\n"
-        f"analysis notebooks for {ename}. See navigation on the left to browse diagnostics as"
-        " delineated by notebook. The website is intended to help users discover and"
+        f"analysis notebooks for {ename}. {browse}"
+        " The website is intended to help users discover and"
         " compare diagnostics. All discussion of the diagnostics occurs on GitHub issues"
         " (see links in Figure captions).\n\n"
         + (f"`ACCESS-community-Hub/access-om3-paper-1/` {authors_md}\n\n" if authors_md else "")
@@ -846,19 +978,6 @@ def update_top_index(
         after = ""
     content = preamble + after
 
-    incomplete_block = ""
-    if failed_nbs or not_run_nbs:
-        incomplete_block = "\n#### Incomplete notebooks\n\n"
-        incomplete_block += "\n".join(
-            f"- `{nb}` — **failed**" for nb in failed_nbs
-        )
-        if failed_nbs and not_run_nbs:
-            incomplete_block += "\n"
-        incomplete_block += "\n".join(
-            f"- `{nb}` — **not run**" for nb in not_run_nbs
-        )
-        incomplete_block += "\n"
-
     block_start = f"<!-- experiment:{ename} -->"
     block_end   = f"<!-- /experiment:{ename} -->"
     figshare_line = (
@@ -870,7 +989,6 @@ def update_top_index(
         f"## Analysis run summary {ename}\n\n"
         + figshare_line
         + run_summary_md + "\n"
-        + incomplete_block
         + f"{block_end}\n"
     )
 
@@ -1028,9 +1146,12 @@ def main() -> None:
 
     print()
     notebook_issues = _load_notebook_issues(HERE)
+    notebook_categories = _load_notebook_categories(HERE)
+    categories_source = _load_categories_source(HERE)
     plain_summary, md_summary = build_run_summary(
         ename, esmdir, ok_nbs, failed_nbs, not_run_nbs, prev_committed_nbs, run_time,
         notebook_issues=notebook_issues,
+        categories=notebook_categories,
         existing_run_times=existing_run_times,
         mkfigs_version=mkfigs_version,
         existing_run_versions=existing_run_versions,
@@ -1161,6 +1282,8 @@ def main() -> None:
         authors_md=authors_md,
         figshare_url=_get_figshare_article_url(mdfol, ename),
         dry_run=args.dry_run,
+        categorised=bool(notebook_categories),
+        categories_source=categories_source,
     )
 
     # -----------------------------------------------------------------------
