@@ -23,43 +23,58 @@ from .configdoc import (  # noqa: F401
 
 
 def get_mkfigs_version() -> str:
-    """Best-effort version string for the run-history table and logs.
+    """Version string for the run-history table and logs.
 
-    mkfigs.sh deliberately runs this package straight off PYTHONPATH from the
-    external/access-model-mkfigs git submodule -- "no venv, no pip install"
-    (see the comment block at the top of mkfigs.sh) -- so
-    importlib.metadata.version() always raises PackageNotFoundError in the
-    normal NCI workflow, and every run showed "unknown" in the version
-    column. Fall back to this package's own git commit hash in that case.
+    Must describe the code that is *actually imported*, not whatever
+    ``access-model-mkfigs`` distribution happens to be installed. mkfigs.sh
+    runs this package off PYTHONPATH from the external/access-model-mkfigs
+    submodule, but if a copy is also pip-installed (e.g. in ~/.local or the
+    analysis env) importlib.metadata reports *that* copy's static "0.1.0",
+    which says nothing about the commit that ran.
+
+    Order:
+      1. ``git describe`` of this file's checkout -> tag (e.g. "v0.2.0"), or
+         "v0.2.0-3-gabc1234", or "git+abc1234" when no tags exist; "-dirty"
+         appended if uncommitted changes are present.
+      2. Installed metadata, but only if that distribution owns this file;
+         a VCS install's commit is appended ("0.1.0+abc1234").
+      3. "unknown".
     """
     import json
-    from importlib.metadata import PackageNotFoundError, distribution, version
+    import subprocess
+    from importlib.metadata import PackageNotFoundError, distribution
     from pathlib import Path
 
+    pkg_dir = Path(__file__).resolve().parent
+
     try:
-        ver = version("access-model-mkfigs")
-        commit = ""
-        try:
-            direct = json.loads(distribution("access-model-mkfigs").read_text("direct_url.json"))
-            commit = direct.get("vcs_info", {}).get("commit_id", "")[:7]
-        except Exception:
-            pass
-        return f"{ver}+{commit}" if commit else ver
-    except PackageNotFoundError:
-        pass
+        res = subprocess.run(
+            ["git", "-C", str(pkg_dir), "describe", "--tags", "--always", "--dirty", "--abbrev=7"],
+            capture_output=True, text=True, timeout=5,
+        )
+        desc = res.stdout.strip()
+        if res.returncode == 0 and desc:
+            # --always with no tags yields a bare hash; make that explicit.
+            if all(c in "0123456789abcdef" for c in desc.removesuffix("-dirty")):
+                desc = f"git+{desc}"
+            return desc
     except Exception:
         pass
 
     try:
-        import subprocess
-        pkg_dir = Path(__file__).resolve().parent
-        result = subprocess.run(
-            ["git", "-C", str(pkg_dir), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        )
-        commit = result.stdout.strip()
-        if result.returncode == 0 and commit:
-            return f"git+{commit}"
+        dist = distribution("access-model-mkfigs")
+        owned = {Path(dist.locate_file(f)).resolve() for f in (dist.files or [])}
+        if Path(__file__).resolve() in owned:
+            ver = dist.version
+            commit = ""
+            try:
+                direct = json.loads(dist.read_text("direct_url.json") or "{}")
+                commit = direct.get("vcs_info", {}).get("commit_id", "")[:7]
+            except Exception:
+                pass
+            return f"{ver}+{commit}" if commit else ver
+    except PackageNotFoundError:
+        pass
     except Exception:
         pass
 
