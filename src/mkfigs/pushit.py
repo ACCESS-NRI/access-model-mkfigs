@@ -45,8 +45,9 @@ from pathlib import Path
 
 import yaml
 
-from . import get_mkfigs_version
+from . import figuredata, get_mkfigs_version
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
+from .linedata import run_name
 
 
 def _check_nci_environment() -> None:
@@ -368,6 +369,34 @@ def _check_figshare_urls(all_urls: dict[str, str]) -> bool:
     return all_ok
 
 
+def upload_figure_data(mdfol: Path, ename: str, esmdir: str, token: str) -> dict | None:
+    """Bundle this run's figure-explorer data, upload it with the PNGs, and add it to the index.
+
+    The index (documentation/figure-data.json) is committed with the run's pages,
+    so a new run reaches the figure explorer with no extra step.
+    """
+    recs = figuredata.records(mdfol)
+    if not recs:
+        print("[figure-data] No line data in this run; nothing to upload.")
+        return None
+    run = run_name(esmdir)
+    prov = figuredata.provenance(REPO, mdfol, get_mkfigs_version(), esmdir)
+    bundle = figuredata.build_bundle(mdfol, run, mdfol.parent, prov)
+    print(f"[figure-data] {run}: {len(recs)} figures, {bundle.stat().st_size / 1e3:.0f} kB")
+    for note in figuredata.problems(recs):
+        print(f"[figure-data]   check: {note}")
+    uploader = FigshareUploader(token, ename, str(mdfol))
+    url = uploader.upload(str(bundle))
+    article = uploader._get_or_create_article()
+    if not figuredata.uploaded_intact(uploader, article, bundle):
+        print("[figure-data] WARNING: Figshare's checksum does not match the local bundle; index not updated.")
+        return None
+    entry = figuredata.pointer(url, bundle, article, prov)
+    figuredata.update_index(REPO / figuredata.INDEX_RELPATH, run, entry)
+    print(f"[figure-data] Added {run} to {figuredata.INDEX_RELPATH}")
+    return entry
+
+
 def check_figshare_upload_mode(ename: str) -> None:
     """--check-figshare-upload: verify all Figshare URLs then print git commands.
 
@@ -413,6 +442,16 @@ def check_figshare_upload_mode(ename: str) -> None:
         print(f"  mkfigs-pushit --check-figshare-upload --ename {ename}")
         sys.exit(1)
 
+    _, _esmdir, _ = parse_mkfigs_sh()
+    data_entry = figuredata.index_entry(REPO / figuredata.INDEX_RELPATH, run_name(_esmdir))
+    if data_entry:
+        if not figuredata.download_matches(data_entry["url"], data_entry["sha256"]):
+            print("\n*** The figure-explorer bundle is not downloadable yet, or its checksum differs. ***")
+            print("Publish the article, then re-run:")
+            print(f"  mkfigs-pushit --check-figshare-upload --ename {ename}")
+            sys.exit(1)
+        print("Figure-explorer bundle downloads and matches its checksum.")
+
     print("\nAll Figshare URLs are publicly accessible.\n")
 
     # Reconstruct the git commands.
@@ -443,6 +482,8 @@ def check_figshare_upload_mode(ename: str) -> None:
         "documentation/mkdocs.yml",
         ".readthedocs.yaml",
     ]
+    if data_entry:
+        added_files.append(str(figuredata.INDEX_RELPATH))
 
     print("Run the following to commit, tag, and push:\n")
     print(f"  cd {REPO}")
@@ -1052,6 +1093,10 @@ def main() -> None:
 
     if args.dry_run:
         print(f"[figshare] DRY RUN: would upload PNGs + rendered notebooks from {mdfol} / {ofol}")
+        n_recs = len(figuredata.records(mdfol)) if mdfol.exists() else 0
+        if n_recs:
+            print(f"[figure-data] DRY RUN: would upload {n_recs} figures of line data and add "
+                  f"{run_name(esmdir)} to {figuredata.INDEX_RELPATH}")
     elif args.skip_figshare:
         print("[figshare] Upload skipped (--skip-figshare).")
     else:
@@ -1061,6 +1106,8 @@ def main() -> None:
                 nb_url = upload_figshare_for_notebook(mdfol, ofol, ename, nb, token)
                 if nb_url:
                     notebook_urls[nb] = nb_url
+            if ok_nbs:
+                upload_figure_data(mdfol, ename, esmdir, token)
         else:
             print("[figshare] No token found — skipping upload.")
             print("           Set FIGSHARE_TOKEN or store token in ~/.figshare_token")
