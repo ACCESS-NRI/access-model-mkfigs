@@ -37,6 +37,29 @@ mkfigs-pushit  [--dry-run] [--skip-figshare] [--check-figshare-upload]
 mkfigs-restore [--ename ENAME] [--force]
 ```
 
+## Figure explorer data
+
+Every figure saved with `MkmdWriter.savefig` also writes its plotted line data
+to `<notebook>_<NN>.lines.json` next to the PNG (see `mkfigs/linedata.py`).
+`mkfigs-pushit` bundles these into `figure-data_<run>.json.gz`, uploads the
+bundle with the PNGs, and adds the run to `documentation/figure-data.json`,
+which is committed with the run's pages. The access-om3-live figure explorer
+reads that index.
+
+To create the data for runs already on the
+[Experiments page](https://access-om3-configs.access-hive.org.au/latest/Experiments/),
+run from the paper repo's `notebooks/` folder on Gadi:
+
+```
+mkfigs-backfill list                  # runs, forcing, tags and Figshare articles
+mkfigs-backfill submit [--only RUN]   # one mkfigs.sh job per run, line-plot notebooks only
+mkfigs-backfill upload [--only RUN]   # bundle, upload, check, publish, add to the index
+```
+
+`upload` publishes a new version of each run's Figshare article only after
+Figshare's MD5 of the bundle matches the local file; `--no-publish` stops
+before publishing and `--dry-run` changes nothing.
+
 ## Testing
 
 ```bash
