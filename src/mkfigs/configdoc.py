@@ -12,6 +12,8 @@ import requests
 from matplotlib import rcParams
 from requests.exceptions import HTTPError
 
+from . import linedata
+
 dpi = 100
 rcParams["figure.dpi"] = dpi
 
@@ -856,8 +858,8 @@ class MkmdWriter:
     Each notebook writes its own ``<nb_stem>.md`` inside ``mdfol`` so that
     mkfigs_pushit.py can copy them to separate pages in the documentation.
 
-    experiment: path to esm file; the last directory component is used as the
-                experiment name.
+    experiment: path to esm file; the run name comes from its folder, via
+                linedata.run_name (skips generic folders such as archive/).
     nbname: filename of the notebook (e.g. ``"SST.ipynb"``).
     cwd: current working directory (used as the base for the plot folder).
     pm (default: False): True when called by papermill.
@@ -865,7 +867,9 @@ class MkmdWriter:
 
     def __init__(self, esm_file, nbname, cwd, pm=False):
         self.fignum = 1
-        self.experiment = os.path.basename(os.path.dirname(esm_file))
+        self.esm_file = esm_file
+        self.experiment = linedata.run_name(esm_file)
+        self._figure_keys = set()
         self.nbname = nbname
         self.nb_stem = nbname[:-6] if nbname.endswith(".ipynb") else nbname
         self.cwd = cwd
@@ -892,6 +896,7 @@ class MkmdWriter:
             os.makedirs(self.mdfol, exist_ok=True)
             figure.savefig(self.mdfol + plot_fname, dpi=dpi, bbox_inches="tight")
             print("Saved", self.mdfol + plot_fname)
+            self._save_line_data(figure, title, caption, plot_fname)
             _mkmd_notebook(
                 title=title,
                 caption=f"`{self.nbname}`: {caption}",
@@ -903,6 +908,21 @@ class MkmdWriter:
                 table="",
             )
             self.fignum += 1
+
+    def _save_line_data(self, figure, title, caption, plot_fname):
+        """Write the figure's plotted data next to its PNG for the figure explorer.
+
+        Never raises: a failed export must not stop the figure being saved.
+        """
+        try:
+            record = linedata.capture(
+                figure, run=self.experiment, notebook=self.nb_stem, fignum=self.fignum,
+                title=title, caption=caption, png=plot_fname, seen=self._figure_keys,
+            )
+            linedata.write(record, self.mdfol + plot_fname[: -len(".png")] + ".lines.json")
+            print(linedata.summary(record))
+        except Exception as exc:  # noqa: BLE001 -- the PNG and page matter more than the export
+            print(f"[linedata] WARNING: could not export line data for {plot_fname}: {exc}")
 
     def table(self, title, table):
         """Append a table to the per-notebook markdown summary.
