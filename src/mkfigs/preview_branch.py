@@ -42,11 +42,11 @@ def main():
         sys.exit("branch name must start with preview/")
     work = Path(f"{repo}-preview-branch")
     shutil.rmtree(work, ignore_errors=True)
-    scratch, clone = work / "scratch", work / "clone"
-    refresh(repo, nbdir, ename, scratch)
+    preview_dir, clone = work / "preview", work / "clone"
+    refresh(repo, nbdir, ename, preview_dir)
     git("clone", "-q", "--depth", "1", f"file://{repo}", str(clone), cwd=work)  # the committed HEAD: .readthedocs.yaml, real manifests
     git("checkout", "-q", "-b", branch, cwd=clone)
-    shutil.copytree(scratch / "documentation", clone / "documentation", dirs_exist_ok=True,
+    shutil.copytree(preview_dir / "documentation", clone / "documentation", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("notebooks_urls.json", ".cache", "site", "__pycache__"))  # keep the real manifests
     for md in (clone / "documentation/docs/pages/experiments" / ename).glob("*.md"):
         # ReadTheDocs serves under /<version>/, where site-absolute /assets/... links 404: make them source-relative
