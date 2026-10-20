@@ -62,6 +62,15 @@ def refresh(repo, nbdir, ename, scratch):
     out = nbdir / f"mkfigs_output_{ename}"
     docs, sdocs, snb = repo / "documentation", scratch / "documentation", scratch / nbdir.relative_to(repo)
     sync(repo, scratch)
+    # pushit reads CITATION.cff from the paper repository root
+    # copy it hence the preview retains the same author attribution.
+    citation = repo / "CITATION.cff"
+    scratch_citation = scratch / "CITATION.cff"
+    
+    if citation.is_file():
+        shutil.copy2(citation, scratch_citation)
+    else:
+        scratch_citation.unlink(missing_ok=True)
     exp = f"docs/pages/experiments/{ename}"
     for rel in ("mkdocs.yml", "docs/pages/index.md", f"{exp}/notebooks_urls.json"):  # pushit rewrites these: start from the repo's
         if (docs / rel).exists():
