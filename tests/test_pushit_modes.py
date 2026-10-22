@@ -168,7 +168,7 @@ def test_partial_run_records_failed_notebook_alongside_a_success(
 
     exp_docs = repo / "documentation" / "docs" / "pages" / "experiments" / ename
     index_md = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
-    assert "❌ FAILED" in index_md
+    assert "| `SST` | ❌ No |" in index_md
     assert not (exp_docs / "SST.md").exists()
     assert (exp_docs / "MLD.md").exists()
 
