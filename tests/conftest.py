@@ -48,7 +48,9 @@ class FakeFigshareServer:
         self.deleted_file_ids: list[int] = []   # audit trail for assertions
         self.created_article_ids: list[int] = []
 
-        # observable article discovery state
+        # 'responses' holds the callback registered below. Monkeypatching the method afterwards
+        # would not replace that saved callback.
+        # Instead, tests control its result and count the actual calls.
         self.article_search_calls = 0
         self.article_list_calls = 0
         self.article_search_override: list[dict] | None = None
@@ -87,7 +89,12 @@ class FakeFigshareServer:
         status: str = "available",
         file_id: int | None = None
     ) -> int:
-        """Insert a file as if a previous run had already uploaded it."""
+        """
+        Seed remote file state without going through an HTTP upload.
+
+        An available file already has content; a created file represents an
+        unfinished upload session, with no completed content yet.
+        """
         fid = file_id if file_id is not None else self._next_file_id
         self._next_file_id = max(self._next_file_id, fid + 1)
         md5 = hashlib.md5(content).hexdigest()
@@ -98,8 +105,8 @@ class FakeFigshareServer:
             "status": status,
             "supplied_md5": md5,
             "computed_md5": md5 if status == "available" else "",
-            "_uploaded_parts": {},  # hold bytes received from PUT
-            "_uploaded_content": content if status == "available" else None,  # an existent file content
+            "_uploaded_parts": {},  # Only HTTP PUT requests populate this.
+            "_uploaded_content": content if status == "available" else None,
         }
         self._article_files.setdefault(
             article_id, []
@@ -180,7 +187,8 @@ class FakeFigshareServer:
     def _article_files_collection(self, request, article_id):
         article_id = int(article_id)
         if request.method == "POST":
-            # create an upload session but does not mean the bytes have arrived.
+            # POST records metadata (including the claimed MD5), but the
+            # actual file bytes arrive in later PUT requests.
             data = json.loads(request.body or "{}")
             fid = self._next_file_id
             self._next_file_id += 1
@@ -227,6 +235,8 @@ class FakeFigshareServer:
             if not parts or any(part["status"] != "COMPLETE" for part in parts):
                 return (400, {}, json.dumps({"error": "file upload incomplete"}))
 
+            # Reconstruct what PUT actually delivered. Copying supplied_md5
+            # here would hide a bug that uploaded the wrong file bytes.
             uploaded_parts = f.get("_uploaded_parts", {})
 
             try:
@@ -241,7 +251,8 @@ class FakeFigshareServer:
                 return (400, {}, json.dumps({"error": f"uploaded content size mismatch: expected {f['size']}, got {len(content)}"}))
 
             f["_uploaded_content"] = content
-            f["computed_md5"] = hashlib.md5(content).hexdigest()  # now compute the md5 of the uploaded content
+            # now compute the md5 of the uploaded content
+            f["computed_md5"] = hashlib.md5(content).hexdigest()
             f["status"] = "available"
             return (200, {}, json.dumps(self._file_json(file_id)))
 
@@ -258,10 +269,8 @@ class FakeFigshareServer:
         file_id = int(file_id)
         f = self._files[file_id]
         size = f["size"]
-        # Single-part uploads only -- sufficient for the small fixture
-        # files this suite uploads. Multi-part chunking itself is
-        # exercised in test_figshare_uploader.py via _upload_parts
-        # directly against a synthetic parts_info dict, not over HTTP.
+        # One part is enough for the small fixtures in this slim suite;
+        # full multipart chunking is intentionally outside its scope.
         parts = f.setdefault("_parts", [{
             "partNo": 1, "startOffset": 0, "endOffset": max(size - 1, 0),
             "status": "PENDING",
@@ -275,7 +284,8 @@ class FakeFigshareServer:
         file_id,
         part_no,
     ):
-        # The PUT request to upload a part of a file. fake reads requets.body & checks expected byte count
+        # PUT carries the file bytes; the earlier POST only created the upload session.
+        # Keep the body for server-side checksum checking.
         file_id = int(file_id)
         part_no = int(part_no)
 
@@ -309,6 +319,8 @@ class FakeFigshareServer:
 
     def register(self, mock: responses.RequestsMock) -> None:
         base = re.escape(FIGSHARE_BASE)
+        # Registration captures this bound callback. Tests must change
+        # article_search_override, not monkeypatch _articles_search later.
         mock.add_callback(
             responses.POST, re.compile(f"{base}/account/articles/search"),
             callback=self._articles_search, content_type="application/json",

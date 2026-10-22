@@ -1,6 +1,7 @@
 """
-Below tests cover the major notebook execution path -
-successful papermill/nbconvert and surfacing notebook failures through mkfigs_errors.log.
+Keep the user-facing notebook workflow covered without pinning helper
+implementations before the planned refactor: execution, conversion after
+failure, and visible errors in mkfigs_errors.log.
 """
 from __future__ import annotations
 
@@ -55,7 +56,8 @@ def test_run_notebook_executes_and_converts_notebook(tmp_path):
 
 def test_run_notebook_reports_failure_and_still_converts(tmp_path):
     """
-    A failed notebook execution should be reported and still converted.
+    Papermill failure must return False, but nbconvert still runs so the
+    failed notebook's rendered output remains available for inspection.
     """
     notebooks_dir = tmp_path / "notebooks"
     notebooks_dir.mkdir()

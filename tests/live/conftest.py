@@ -45,7 +45,8 @@ def _live_tests_enabled() -> bool:
 @pytest.fixture(autouse=True)
 def _require_explicit_live_figshare_opt_in(monkeypatch):
     """
-    Skip every test in tests/live unless real-network access was opted into explicitly.
+    Apply the opt-in to every live test, including future ones. A developer's
+    existing token alone must not enable real-network requests during pytest.
     """
     if not _live_tests_enabled():
         pytest.skip(
@@ -57,6 +58,8 @@ def _require_explicit_live_figshare_opt_in(monkeypatch):
 
     real_figshare_request = configdoc._figshare_request
 
+    # A private test article can be deleted, but publishing is not safe
+    # to undo, even during an explicitly enabled live test.
     def guarded_figshare_request(method, url, *args, **kwargs):
         if url.rstrip("/").endswith("/publish"):
             pytest.fail(
