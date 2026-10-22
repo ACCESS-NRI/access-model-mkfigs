@@ -111,6 +111,6 @@ def test_intro_links_category_source(tmp_path, monkeypatch):
                             categories_source="https://github.com/org/repo/issues/23")
     md = (tmp_path / "index.md").read_text()
     assert "grouped below by category, following [issue #23](https://github.com/org/repo/issues/23);" in md
-    assert "lists every notebook alphabetically" in md
+    assert "lists all available notebooks alphabetically" in md
     assert "delineated by notebook" not in md
     assert "Incomplete notebooks" not in md
