@@ -38,6 +38,8 @@ dependencies = [
 dev = [
     "coverage",  # testing
     "pytest",  # testing
+    "jinja2",  # category-heading template rendering tests
+    "markdown",  # category-heading anchor rendering tests
     "responses",  # mocks requests.request/.put for the Figshare-API test double in tests/conftest.py
     "ruff"  # linting
     ]
