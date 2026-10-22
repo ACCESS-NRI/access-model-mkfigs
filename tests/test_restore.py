@@ -88,7 +88,7 @@ def test_restore_rebuilds_output_from_committed_content(pushed_experiment, monke
 def test_restore_preserves_existing_notebook_by_default(pushed_experiment, monkeypatch):
     """
     Restore any missing notebooks, but keep existing local files intact.
-    users should not lose local work unless they explicitly pass --force.
+    Users should not lose local work unless they explicitly pass --force.
     """
     notebooks_dir = pushed_experiment / "notebooks"
     ofol = notebooks_dir / "mkfigs_output_test_experiment_01"
