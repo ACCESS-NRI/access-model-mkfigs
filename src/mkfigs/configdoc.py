@@ -901,7 +901,7 @@ class MkmdWriter:
             path = os.path.join(self.mdfol, fname)
             if os.path.exists(path):
                 os.remove(path)
-                print("Removed output from a previous run:", path)
+                print("WARNING: Removed output from a previous run:", path)
 
     def savefig(self, figure, title, caption, dpi=dpi):
         """Save figure and append to the per-notebook markdown summary.
