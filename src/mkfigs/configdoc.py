@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -876,6 +877,31 @@ class MkmdWriter:
         # grandparent is the paper repo root -- the git repo that actually
         # contains notebooks/<nb_stem>.ipynb and its commit history.
         self.repo_root = Path(self.cwd).resolve().parent.parent
+        self._outputs_reset = False
+
+    def _reset_previous_outputs(self):
+        """Remove this notebook's markdown and PNGs left by an earlier run.
+
+        _mkmd_notebook() appends to <nb_stem>.md and figure numbering restarts
+        at <nb_stem>_01.png, so re-running a notebook into an existing output
+        folder would otherwise duplicate every section and leave any extra PNGs
+        from a longer earlier run for pushit to upload. Runs once, on the first
+        savefig/table, so a run that fails before producing any output leaves
+        the previous results in place.
+        """
+        if self._outputs_reset:
+            return
+        self._outputs_reset = True
+        if not os.path.isdir(self.mdfol):
+            return
+        # exact match, so "MLD" never removes "MLD_max_01.png"
+        own_png = re.compile(rf"^{re.escape(self.nb_stem)}_\d+\.png$")
+        stale = [f"{self.nb_stem}.md"] + [f for f in os.listdir(self.mdfol) if own_png.match(f)]
+        for fname in stale:
+            path = os.path.join(self.mdfol, fname)
+            if os.path.exists(path):
+                os.remove(path)
+                print("WARNING: Removed output from a previous run:", path)
 
     def savefig(self, figure, title, caption, dpi=dpi):
         """Save figure and append to the per-notebook markdown summary.
@@ -886,6 +912,7 @@ class MkmdWriter:
         dpi (optional; default: 100): dpi for figure
         """
         if self.papermill:
+            self._reset_previous_outputs()
             plot_fname = (
                 self.nb_stem + "_" + str(self.fignum).zfill(2) + ".png"
             )
@@ -911,6 +938,7 @@ class MkmdWriter:
         table: list of strings, one per markdown table row
         """
         if self.papermill:
+            self._reset_previous_outputs()
             _mkmd_notebook(
                 title=title,
                 caption=f"`{self.nbname}`: This is a table caption",
