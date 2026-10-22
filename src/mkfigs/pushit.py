@@ -244,6 +244,34 @@ def group_notebooks_by_category(
     return {c: nbs for c, nbs in grouped.items() if nbs}
 
 
+MKFIGS_REPO_URL = "https://github.com/ACCESS-NRI/access-model-mkfigs"
+
+_VERSION_RE = re.compile(
+    r"^(?:"
+    r"git\+(?P<hash>[0-9a-f]{7,40})"                       # git+abc1234
+    r"|(?P<tag>v?\d[\w.]*?)-\d+-g(?P<dhash>[0-9a-f]{7,40})"  # v0.2.0-3-gabc1234
+    r"|[\w.]+\+(?P<phash>[0-9a-f]{7,40})"                   # 0.1.0+abc1234 (pip VCS install)
+    r"|(?P<exact>v\d[\w.]*)"                               # v0.2.0 (exact tag)
+    r")(?P<dirty>-dirty)?$"
+)
+
+
+def _mkfigs_version_md(version: str) -> str:
+    """Render a get_mkfigs_version() string as a Markdown link to GitHub.
+
+    Commits link to /commit/<hash>, exact tags to /tree/<tag>; "-dirty" adds a
+    note that local changes were present. Anything unparseable is returned as-is.
+    """
+    m = _VERSION_RE.match(version)
+    if not m:
+        return version
+    commit = m["hash"] or m["dhash"] or m["phash"]
+    target = f"commit/{commit}" if commit else f"tree/{m['exact']}"
+    label = version.removesuffix("-dirty")
+    link = f"[`{label}`]({MKFIGS_REPO_URL}/{target})"
+    return f"{link} (+ local changes)" if m["dirty"] else link
+
+
 def build_run_summary(
     ename: str,
     esmdir: str,
@@ -347,7 +375,7 @@ def build_run_summary(
         "| Date | Notebooks run | access-model-mkfigs |\n"
         "|---|---|---|\n"
         + "\n".join(
-            f"| {t} | {', '.join('`' + nb + '`' for nb in sorted(nbs))} | {v} |"
+            f"| {t} | {', '.join('`' + nb + '`' for nb in sorted(nbs))} | {_mkfigs_version_md(v)} |"
             for (t, v), nbs in sorted(_by_run.items(), reverse=True)
         ) + "\n"
     )
