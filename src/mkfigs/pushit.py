@@ -233,7 +233,8 @@ def group_notebooks_by_category(
     Returns an ordered {category: [notebook, ...]} with empty categories
     dropped; notebook order follows *notebooks*.
     """
-    grouped: dict[str, list[str]] = {c: [] for c in [*categories, UNCATEGORISED]}
+    grouped = {c: [] for c in categories if c != UNCATEGORISED}
+    grouped[UNCATEGORISED] = []
     for nb in notebooks:
         pinned, by_issue = category_candidates(nb, notebook_issues, categories)
         if warn and not pinned and len(by_issue) > 1:
@@ -950,7 +951,7 @@ def update_top_index(
         m = re.search(r"/issues/(\d+)", categories_source)
         label = f"issue #{m.group(1)}" if m else "this list"
         browse = (f"Diagnostics are grouped below by category, following [{label}]({categories_source});"
-                  " the navigation on the left lists every notebook alphabetically.")
+                  " the navigation on the left lists all available notebooks alphabetically.")
     elif categorised:
         browse = ("Diagnostics are grouped below by category;"
                   " the navigation on the left lists every notebook alphabetically.")
