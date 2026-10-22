@@ -954,7 +954,7 @@ def update_top_index(
                   " the navigation on the left lists all available notebooks alphabetically.")
     elif categorised:
         browse = ("Diagnostics are grouped below by category;"
-                  " the navigation on the left lists every notebook alphabetically.")
+                  " the navigation on the left lists all available notebooks alphabetically.")
     else:
         browse = "See navigation on the left to browse diagnostics as delineated by notebook."
     preamble = (
