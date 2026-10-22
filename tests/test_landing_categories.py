@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import jinja2
+import markdown
+import pytest
+
 from mkfigs.pushit import (
     STATUS_HEADER,
     UNCATEGORISED,
@@ -59,7 +63,7 @@ def test_markdown_has_subheadings_jump_links_and_renamed_column():
         notebook_issues=ISSUES, categories=CATEGORIES,
     )
     assert "**Jump to:** [Global temperature and salinity structure](#cat-global-temperature-and-salinity-structure) (1)" in md
-    assert "### Circulation {#cat-circulation}" in md
+    assert '### Circulation {id="cat-circulation"}' in md
     assert "### WOMBAT" not in md
     assert f"| Notebook | {STATUS_HEADER} | GitHub Issue(s) | Links |" in md
     assert "| Status |" not in md
@@ -114,3 +118,27 @@ def test_intro_links_category_source(tmp_path, monkeypatch):
     assert "lists all available notebooks alphabetically" in md
     assert "delineated by notebook" not in md
     assert "Incomplete notebooks" not in md
+
+
+@pytest.mark.parametrize(
+    "category, anchor",
+    [
+        ("Circulation", "cat-circulation"),
+        ("Temperature and salinity structure", "cat-temperature-and-salinity-structure"),
+        (
+            "Surface forcing / budget closure / mixing etc",
+            "cat-surface-forcing-budget-closure-mixing-etc",
+        ),
+    ],
+)
+def test_category_anchors_survive_template_and_markdown_rendering(category, anchor):
+    """Render category headings through Jinja before resolving Markdown anchors."""
+    _, md = build_run_summary(
+        "expt", "/esm.json", ["SST"], [], [], [], RUN,
+        categories={category: ["SST"]},
+    )
+    # mkdocs-macros renders Jinja before Markdown's attr_list extension.
+    rendered = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(md).render()
+    html = markdown.markdown(rendered, extensions=["attr_list", "tables"])
+    assert f'<h3 id="{anchor}">{category}</h3>' in html
+    assert f'href="#{anchor}"' in html

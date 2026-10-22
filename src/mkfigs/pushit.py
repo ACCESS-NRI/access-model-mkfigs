@@ -325,8 +325,9 @@ def build_run_summary(
         jump = " · ".join(
             f"[{cat}](#{_category_anchor(cat)}) ({len(nbs)})" for cat, nbs in grouped.items()
         )
+        # Avoid Jinja's "{#" comment delimiter when mkdocs-macros renders this Markdown.
         tables_md = f"**Jump to:** {jump}\n\n" + "\n".join(
-            f"### {cat} {{#{_category_anchor(cat)}}}\n\n{_table(nbs)}"
+            f'### {cat} {{id="{_category_anchor(cat)}"}}\n\n{_table(nbs)}'
             for cat, nbs in grouped.items()
         )
     else:
