@@ -27,7 +27,8 @@ def test_fake_figshare_records_uploaded_part_bytes(
     fake_figshare,
 ):
     """
-    The fake server must retain the exact bytes received by PUT.
+    Prove the fake records the actual PUT body, not just an upload success status.
+    The subsequent checksum test depends on this invariant.
     """
     article_id = fake_figshare.seed_article("test")
     payload = b"actual uploaded bytes"
@@ -65,7 +66,8 @@ def test_fake_figshare_records_uploaded_part_bytes(
 
 def test_fake_figshare_computes_md5_from_uploaded_bytes(fake_figshare):
     """
-    Compute md5 must come from uploaded bytes not client supplied metadata
+    Deliberately claim a wrong MD5 when creating the upload session, then PUT real bytes.
+    The computed checksum must follow the bytes, not the claim.
     """
     article_id = fake_figshare.seed_article("test")
     payload = b"actual uploaded bytes"
@@ -145,7 +147,9 @@ def test_get_or_create_article_finds_existing_by_title_search(fake_figshare, tmp
 
 def test_get_or_create_article_falls_back_to_pagination_when_search_misses(fake_figshare, tmp_path):
     """
-    A clean but empty search result must fall back to full pagination
+    Search can miss an article that still exists in the account listing.
+    The override controls the callback already registered by responses;
+    counters prove the listing fallback ran without creating a duplicate.
     """
     up = _uploader(tmp_path)
     existing_id = fake_figshare.seed_article(up.article_title)
@@ -171,7 +175,8 @@ def test_get_or_create_article_falls_back_to_pagination_when_search_misses(fake_
 
 def test_upload_pngs_for_notebook_uploads_and_records_manifest(fake_figshare, tmp_path):
     """
-    Upload only this notebook's pngs and persist their remote URLs.
+    Cover more than the isolated reconciliation decisions: select this notebook's pngs,
+    persist their checksums/URLs, and verify remote state.
     """
     up = _uploader(tmp_path)
     mdfol = Path(up.mdfol)
@@ -312,6 +317,8 @@ def test_validate_and_refresh_notebook_urls_leaves_entry_as_is_when_no_replaceme
 
 # ---------------------------------------------------------------------------
 # Remote-file reconciliation
+# Preserve fresh/reuse/replace/resume decisions without pinning every
+# internal step of _upload_file ahead of the planned refactor.
 # ---------------------------------------------------------------------------
 
 def test_reconcile_remote_file_returns_fresh_when_missing(
@@ -378,7 +385,8 @@ def test_reconcile_remote_file_resumes_matching_incomplete_file(
     tmp_path,
 ):
     """
-    If a remote file exists but is incomplete, it should be resumed.
+    A "created" remote file has a matching claimed MD5 but no completed
+    content. Reuse its upload session rather than starting a duplicate.
     """
     up = _uploader(tmp_path)
     article_id = fake_figshare.seed_article("test")

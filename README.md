@@ -214,6 +214,25 @@ git commit -m "Bump access-model-mkfigs to <tag-or-commit>"
 
 Everyone else then runs `git pull && git submodule update --init --recursive`.
 
+## Previewing the website without Figshare
+
+`mkfigs-preview [--ename E] [--serve] [--preview-dir DIR] [REPO]` renders the site from a run's `mkfigs_output_<ENAME>/` (finished
+or still running) without uploading anything and without writing to your repo: it works on a copy of `documentation/` (uncommitted
+edits included).
+`pushit` runs from the paper repo's pinned engine (`external/access-model-mkfigs`, as in production) if that submodule is
+initialised, otherwise from the installed package. It needs `mkdocs` and the docs plugins (`documentation/requirements.txt`) in
+the current environment. It works in `<repo>-preview/` (or `--preview-dir`, which must lie outside the repo), kept between
+runs so re-runs are fast. Without `--serve` it builds the site (`<repo>-preview/site`); with `--serve` it serves it on
+http://127.0.0.1:8000/ and re-renders about a second after you edit the repo's `documentation/` or the run output (reload the
+page). Earlier experiments' notebook pages are downloaded from Figshare in the real build, so their links show up as warnings in
+`<repo>-preview/mkdocs.log`.
+
+`mkfigs-preview-branch --fork <YOUR FORK URL> [--branch preview/NAME] [--ename E] [REPO]` prepares a throwaway `preview/...` branch so
+that ReadTheDocs can render the site online (point a ReadTheDocs project at your fork and activate the branch). It commits only
+`documentation/` on top of your committed HEAD, in `<repo>-preview-branch/clone`, makes the figure links relative (ReadTheDocs serves
+under `/<version>/`), keeps the real Figshare manifests, refuses organisation repos, files over 50 MB and branches not named
+`preview/...`, and prints the push command instead of pushing. Never merge such a branch; delete it afterwards.
+
 ## Other models
 
 The defaults are for ACCESS-OM3. Other paper repos set these in `mkfigs.sh`. `pushit` also reads
