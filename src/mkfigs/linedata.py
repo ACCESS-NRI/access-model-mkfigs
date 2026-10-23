@@ -6,15 +6,19 @@ exactly what was plotted, read back from the matplotlib figure, so no notebook
 changes are needed:
 
 * every line's values, label, colour and style;
-* reference marks: ``axhline``/``axvline`` and constant two-point lines, and
-  ``axhspan``/``axvspan`` bands and periods;
+* reference marks: ``axhline``/``axvline`` and constant two-point lines (a pair of
+  unlabelled ones in one colour is a range: a band), and ``axhspan``/``axvspan``
+  bands and periods;
 * panel titles and axis labels, with run names and date ranges stripped out for
   the figure key but kept, alongside the originals, as metadata for display.
 
 Each line gets a role. A line is the run's **own** when its label contains the
 run's name (see :func:`run_name`), or when it is unlabelled and drawn in the same
 colour as an own line on the same axes (the faint monthly values behind a rolling
-mean). In a figure where no label names the run, every line is taken as own and
+mean); an unlabelled ``other`` line takes the label of the one labelled line in its
+colour on the same axes. When the legend is on another panel, a panel where no
+line names the run matches the run's colours across the whole figure (and a
+panel with no labels takes the figure's labels). In a figure where no label names the run, every line is taken as own and
 the record says so (``status: "all-lines-own"``). Marker-only lines are
 observations (``reference``), and everything else is ``other`` (other runs, OM2,
 CM3), which the explorer resolves against the Experiments table. Setting
@@ -32,6 +36,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib import dates as mdates
 from matplotlib.colors import to_hex
+from matplotlib.container import ErrorbarContainer
 from matplotlib.patches import Polygon, Rectangle
 
 SCHEMA = 1
@@ -87,6 +92,9 @@ def _colour(artist) -> str | None:
 
 def _values(values) -> tuple[list, str, str | None]:
     """JSON-ready values, the axis kind ("time" or "number") and any cftime calendar."""
+    if getattr(values, "dtype", None) is not None and values.dtype.kind == "M":
+        # datetime64[ns] cast to object gives ints (datetime.datetime cannot hold ns); [us] gives datetimes
+        values = np.asarray(values).astype("datetime64[us]")
     arr = np.asarray(values, dtype=object).ravel()
     first = next((v for v in arr if v is not None and not (isinstance(v, float) and np.isnan(v))), None)
     if isinstance(first, (np.datetime64, dt.date)) or hasattr(first, "calendar"):
@@ -105,15 +113,25 @@ def _values(values) -> tuple[list, str, str | None]:
         nums = np.asarray(values, dtype=float).ravel()
     except (TypeError, ValueError):
         return [None if v is None else str(v) for v in arr], "category", None
-    return [float(f"{v:.{SIG_FIGS}g}") if np.isfinite(v) else None for v in nums], "number", None
+    # SIG_FIGS significant figures of the values' own variation, not of the values: a global mean such as the
+    # ocean's mass (1.38128e21 kg, varying by ~1e16) would otherwise be a staircase of a few levels
+    finite = nums[np.isfinite(nums)]
+    digits = SIG_FIGS
+    if finite.size > 1 and (span := float(finite.max() - finite.min())) > 0:
+        digits += max(0, min(9, int(np.ceil(np.log10(float(np.abs(finite).max()) / span)))))
+    return [float(f"{v:.{digits}g}") if np.isfinite(v) else None for v in nums], "number", None
+
+
+def _date_axis(ax, which: str) -> bool:
+    axis = ax.xaxis if which == "x" else ax.yaxis
+    converter = axis.get_converter() if hasattr(axis, "get_converter") else getattr(axis, "converter", None)
+    return converter is not None and "Date" in type(converter).__name__
 
 
 def _axis_values(ax, which: str, values):
     """Convert numbers stored in axis units (as patches keep them) back to dates where possible."""
-    axis = ax.xaxis if which == "x" else ax.yaxis
-    converter = axis.get_converter() if hasattr(axis, "get_converter") else getattr(axis, "converter", None)
-    if converter is not None and "Date" in type(converter).__name__:
-        return [mdates.num2date(v).replace(tzinfo=None).isoformat()[:19] for v in values]
+    if _date_axis(ax, which):
+        return [mdates.num2date(v).replace(tzinfo=None).isoformat()[:19] if v is not None else None for v in values]
     return [float(f"{v:.{SIG_FIGS}g}") for v in values]
 
 
@@ -127,32 +145,68 @@ def _blended(artist) -> bool:
     return type(tr).__name__.startswith("Blended")
 
 
+def _errorbars(ax):
+    """ax.errorbar series: the label sits on the container, not its line, and the caps are separate lines.
+    Returns {id(data line): (label, [[y_lo, y_hi] per point] or None)} and the ids of the cap lines."""
+    series, caps = {}, set()
+    for c in ax.containers:
+        if not isinstance(c, ErrorbarContainer) or c.lines[0] is None:
+            continue
+        data_line, cap_lines, bar_cols = c.lines
+        caps |= {id(line) for line in cap_lines}
+        yerr = None
+        try:  # the y bars are the last collection; points with NaN values have no bar, so match bars to points by x
+            if c.has_yerr and bar_cols:
+                bars = {}
+                for seg in bar_cols[-1].get_segments():
+                    xy = np.asarray(seg, dtype=float).reshape(-1, 2)
+                    if len(xy) >= 2 and np.isfinite(xy).all():
+                        bars[float(xy[0, 0])] = [float(xy[:, 1].min()), float(xy[:, 1].max())]
+                xs = np.atleast_1d(np.asarray(data_line.get_xdata(), dtype=float))
+                yerr = [bars.get(float(x)) for x in xs] if bars else None
+        except (TypeError, ValueError):  # keep the series and its label without error bars
+            yerr = None
+        series[id(data_line)] = (_label(c), yerr)
+    return series, caps
+
+
 def _marks_and_lines(ax):
     lines, marks = [], []
+    errorbars, caps = _errorbars(ax)
+    years = False  # an x axis of plain year numbers, read as dates: its spans and vlines are years too
     for line in ax.get_lines():
         if not line.get_visible():
             continue
+        if id(line) in caps:
+            continue
         x, y = line.get_xdata(orig=True), line.get_ydata(orig=True)
-        label = _label(line)
+        label, yerr = errorbars.get(id(line), (_label(line), None))
         if _blended(line) and len(x) == 2:  # axhline / axvline
             xs, ys = np.asarray(x, dtype=object), np.asarray(y, dtype=object)
             if list(xs) == [0, 1] and ys[0] == ys[1]:
-                marks.append({"kind": "hline", "label": label, "y": _values([ys[0]])[0][0]})
+                marks.append({"kind": "hline", "label": label, "y": _values([ys[0]])[0][0], "_color": _colour(line)})
             elif list(ys) == [0, 1] and xs[0] == xs[1]:
                 marks.append({"kind": "vline", "label": label, "x": _values([xs[0]])[0][0]})
             continue
         xv, x_kind, calendar = _values(x)
         yv, _, _ = _values(y)
+        if x_kind == "number" and _date_axis(ax, "x"):  # e.g. plot(ax.get_xlim(), ...) on a date axis
+            xv, x_kind = _axis_values(ax, "x", [float(v) if np.isfinite(v) else None for v in np.asarray(x, dtype=float).ravel()]), "time"
+        elif x_kind == "number" and _year_axis(ax, xv):  # annual values plotted against year numbers
+            xv, x_kind, years = [_year_date(v) for v in xv], "time", True
         markers_only = line.get_linestyle() in ("None", "none", " ", "") and line.get_marker() not in (None, "None", "none", "", " ")
-        if len(xv) == 2 and yv[0] == yv[1] and label and not markers_only:  # constant obs line drawn with plot()
-            marks.append({"kind": "hline", "label": label, "y": yv[0]})
+        if len(xv) == 2 and yv[0] == yv[1] and not markers_only:  # constant obs line (or range bound) drawn with plot()
+            marks.append({"kind": "hline", "label": label, "y": yv[0], "_color": _colour(line)})
             continue
         if not xv:
             continue
         alpha = line.get_alpha()
-        style = "points" if markers_only else ("thin" if alpha is not None and alpha < 0.8 else "line")
+        # faint or hairline lines (alpha < 0.8, or linewidth < 0.6 as StraitTransports' monthly values) are "thin"
+        style = "points" if markers_only else ("thin" if alpha is not None and alpha < 0.8 or line.get_linewidth() < 0.6 else "line")
         lines.append({"label": label, "role": None, "style": style, "color": _colour(line), "x": xv, "y": yv,
-                      "_gid": line.get_gid(), "_x_kind": x_kind, "_calendar": calendar})
+                      "_gid": line.get_gid(), "_x_kind": x_kind, "_calendar": calendar,
+                      **({"yerr": [[float(f"{v:.{SIG_FIGS}g}") for v in pair] if pair else None for pair in yerr]}
+                         if yerr and len(yerr) == len(yv) else {})})
     for patch in ax.patches:
         if not (_blended(patch) and isinstance(patch, (Rectangle, Polygon))):
             continue
@@ -166,7 +220,50 @@ def _marks_and_lines(ax):
             marks.append({"kind": "band", "label": _label(patch), "y": _axis_values(ax, "y", [y0, y0 + h])})
         elif np.isclose(h, 1.0) and np.isclose(y0, 0.0):  # axvspan
             marks.append({"kind": "span", "label": _label(patch), "x": _axis_values(ax, "x", [x0, x0 + w])})
+    if years:
+        for m in marks:
+            if m["kind"] in ("span", "vline"):
+                m["x"] = [_year_date(v) for v in m["x"]] if m["kind"] == "span" else _year_date(m["x"])
+    # two unlabelled constant lines in one colour are a range's bounds (e.g. an observed range): one band
+    # (named after the labelled line in that colour, e.g. the observed mean, when there is one)
+    bounds, named = {}, {}
+    for m in marks:
+        if m["kind"] == "hline" and m.get("_color"):
+            (named if m["label"] else bounds).setdefault(m["_color"], []).append(m)
+    for colour, pair in bounds.items():
+        if len(pair) == 2:
+            marks = [m for m in marks if m not in pair]
+            label = named[colour][0]["label"] if len(named.get(colour, [])) == 1 else ""
+            marks.append({"kind": "band", "label": label, "y": sorted(m["y"] for m in pair)})
+    for m in marks:
+        m.pop("_color", None)
     return lines, marks
+
+
+def _year_axis(ax, xv) -> bool:
+    """An x axis of plain year numbers (annual values), labelled as years (on this axes or, in a grid with a
+    shared x axis, on the axes that carries the label)."""
+    nums = [v for v in xv if v is not None]
+    labels = {a.get_xlabel().strip().lower() for a in ax.get_shared_x_axes().get_siblings(ax)} | {ax.get_xlabel().strip().lower()}
+    return bool(labels & {"year", "years", "time (years)"}) and bool(nums) and all(1000 <= v < 3000 for v in nums)
+
+
+def _year_date(v):
+    if v is None:
+        return None
+    year = int(v)
+    return (dt.datetime(year, 1, 1) + dt.timedelta(days=(v - year) * 365.25)).isoformat()[:19]
+
+
+def _panel_title(ax) -> str:
+    """The panel's title: centre, left and right titles, and text drawn just above the axes in axes
+    coordinates (as notebooks do for "a) ..." and region labels), left to right, joined with " · "."""
+    parts = [(0.0, ax.get_title(loc="left")), (0.5, ax.get_title()), (1.0, ax.get_title(loc="right"))]
+    for t in ax.texts:
+        x, y = t.get_position()
+        if t.get_transform() is ax.transAxes and y >= 1 and t.get_visible():
+            parts.append((x, t.get_text()))
+    return " · ".join(text.strip() for _, text in sorted(parts, key=lambda p: p[0]) if text and text.strip())
 
 
 def _has_content(ax) -> bool:
@@ -178,9 +275,24 @@ def _attribute(panels: list[dict], run: str) -> str:
     def names_run(line):
         return bool(line["label"]) and run in line["label"]
 
+    def colour_maps(lines):
+        own = {line["color"] for line in lines if names_run(line)}
+        labels = {}
+        for line in lines:
+            if line["label"]:
+                labels.setdefault(line["color"], set()).add(line["label"])
+        return own, labels
+
     any_named = any(names_run(line) for p in panels for line in p["lines"])
+    # The figure's legend may be on another panel: a panel where no line names the run takes the run's colours
+    # from the whole figure, and a panel with no labels takes the labels from it too. (Inherited labels never
+    # name the run, so attributing a record again gives the same roles.)
+    figure_own, figure_labels = colour_maps([line for p in panels for line in p["lines"]])
     for p in panels:
-        own_colours = {line["color"] for line in p["lines"] if names_run(line)}
+        own_colours, labels = colour_maps(p["lines"])
+        if not any(names_run(line) for line in p["lines"]):
+            own_colours = figure_own
+        labels = labels or figure_labels
         for line in p["lines"]:
             gid = line.pop("_gid", None)
             if gid in ROLES:
@@ -193,6 +305,9 @@ def _attribute(panels: list[dict], run: str) -> str:
                 line["role"] = "own"
             else:
                 line["role"] = "other"
+                if not line["label"] and len(labels.get(line["color"], ())) == 1:
+                    # e.g. another run's or OM2's monthly values behind its labelled running mean
+                    line["label"] = next(iter(labels[line["color"]]))
     n_lines = sum(len(p["lines"]) for p in panels)
     n_own = sum(1 for p in panels for line in p["lines"] if line["role"] == "own")
     if n_lines == 0:
@@ -227,7 +342,7 @@ def capture(figure, *, run: str, notebook: str, fignum: int, title: str, caption
         lines, marks = _marks_and_lines(ax)
         if not lines and not marks:
             continue
-        full = ax.get_title() or ax.get_title(loc="left") or ax.get_title(loc="right")
+        full = _panel_title(ax)
         clean, periods = split_title(full, run)
         kinds = {line.pop("_x_kind") for line in lines}
         calendars = {c for c in (line.pop("_calendar") for line in lines) if c}

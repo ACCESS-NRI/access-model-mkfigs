@@ -15,6 +15,7 @@ see what would happen.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -55,7 +56,9 @@ def cmd_submit(runs, notebooks_dir: Path, notebooks: list[str], dry_run: bool) -
         if not Path(r.datastore).exists():
             skipped.append(f"{r.name}: datastore missing ({r.datastore})")
             continue
-        cmd = ["qsub", "-v", f"ENAME={r.name},ESMDIR={r.datastore},MKFIGS_NOTEBOOKS={':'.join(notebooks)}", "mkfigs.sh"]
+        # Gadi's qsub ignores $PROJECT once -v is given ("You have not requested a project to charge"), so pass it
+        project = ["-P", os.environ["PROJECT"]] if os.environ.get("PROJECT") else []
+        cmd = ["qsub", *project, "-v", f"ENAME={r.name},ESMDIR={r.datastore},MKFIGS_NOTEBOOKS={':'.join(notebooks)}", "mkfigs.sh"]
         if dry_run:
             print("DRY RUN:", " ".join(cmd))
             continue

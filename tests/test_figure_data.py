@@ -168,12 +168,13 @@ def test_backfill_submit_sends_one_job_per_run_and_skips_missing_datastores(
     (stores / IAF).mkdir(parents=True)
     (stores / IAF / "datastore.json").write_text("{}")
     monkeypatch.chdir(patch_repo_paths / "notebooks")
+    monkeypatch.setenv("PROJECT", "tm70")  # with -v, Gadi's qsub needs the project given explicitly
     with patch.object(backfill.subprocess, "run") as qsub:
         qsub.return_value.returncode, qsub.return_value.stdout = 0, "123.gadi-pbs"
         status = backfill.main(["submit", "--table", str(_table(tmp_path, stores))])
     (call,) = qsub.call_args_list
-    assert call.args[0][:2] == ["qsub", "-v"] and f"ENAME={IAF}," in call.args[0][2]
-    assert "MKFIGS_NOTEBOOKS=timeseries:Timeseries_daily_extreme_from_2D_fields:" in call.args[0][2]
+    assert call.args[0][:4] == ["qsub", "-P", "tm70", "-v"] and f"ENAME={IAF}," in call.args[0][4]
+    assert "MKFIGS_NOTEBOOKS=timeseries:Timeseries_daily_extreme_from_2D_fields:" in call.args[0][4]
     out = capsys.readouterr().out
     assert status == 1 and "SKIPPED" in out and RYF in out
 
