@@ -165,6 +165,91 @@ def test_check_upload_paths_cm3(tmp_path, monkeypatch, capsys, cm3_identity):
     assert "om3" not in out.lower()
 
 
+@pytest.mark.parametrize("identity,subdir", [("om3_identity", ""), ("cm3_identity", "polished-python")])
+def test_check_upload_commits_and_tags_on_ename_branch(
+    tmp_path, monkeypatch, capsys, request, identity, subdir
+):
+    """The render commit and its tag go on a branch named eval-ENAME, never on main (#8)."""
+    request.getfixturevalue(identity)
+    monkeypatch.setattr(pushit, "_git_lines", _fake_git())  # first render: no tags, no branch
+    out = _check_upload_output(tmp_path, monkeypatch, capsys, subdir)
+    lines = [ln.strip() for ln in out.splitlines()]
+    assert any(ln.startswith("git tag -a exp1-") and ".000 " in ln for ln in lines)
+    switch = lines.index("git switch -c eval-exp1")
+    commit = next(i for i, ln in enumerate(lines) if ln.startswith("git commit"))
+    tag = next(i for i, ln in enumerate(lines) if ln.startswith("git tag -a exp1-"))
+    assert switch < commit < tag
+    assert "git push -u origin eval-exp1" in lines
+    assert any(ln.startswith("git push origin exp1-") for ln in lines)
+    assert "main --tags" not in out
+    assert lines.index("git push -u origin eval-exp1") < next(
+        i for i, ln in enumerate(lines) if ln.startswith("git switch main")
+    )
+
+
+def _fake_git(tags=(), branch=False, prev_urls=None):
+    """Stand-in for pushit._git_lines: earlier tags, branch presence, and the
+    notebooks_urls.json committed at the latest tag."""
+    def fake(*args):
+        if args[:2] == ("tag", "-l"):
+            return list(tags)
+        if args[0] == "rev-parse":
+            return ["abc123"] if branch else []
+        if args[0] == "show":
+            return [json.dumps(prev_urls or {})]
+        return []
+    return fake
+
+
+def test_next_render_tag_increments_within_month_only():
+    from datetime import date
+    tags = ["e-2026.07.000", "e-2026.07.001", "e-2026.06.004", "e-x-2026.07.009"]
+    assert pushit._next_render_tag("e", date(2026, 7, 9), tags) == "e-2026.07.002"
+    assert pushit._next_render_tag("e", date(2026, 8, 1), tags) == "e-2026.08.000"
+    assert pushit._next_render_tag("e", date(2026, 8, 1), []) == "e-2026.08.000"
+
+
+def test_render_tags_ignore_other_experiments_with_same_prefix(monkeypatch, tmp_path):
+    monkeypatch.setattr(pushit, "REPO", tmp_path)
+    monkeypatch.setattr(pushit, "_git_lines", _fake_git(
+        tags=["exp1-2026.07.000", "exp1-1.0-beta-cdfb3543-2026.07.000", "exp1-notes"]
+    ))
+    assert pushit._render_tags("exp1") == ["exp1-2026.07.000"]
+
+
+@pytest.mark.parametrize("identity,subdir", [("om3_identity", ""), ("cm3_identity", "polished-python")])
+def test_check_upload_rerun_bumps_tag_and_reuses_branch(
+    tmp_path, monkeypatch, capsys, request, identity, subdir
+):
+    """After restore, a re-render tags the next serial on the existing eval-ENAME branch."""
+    from datetime import date
+    request.getfixturevalue(identity)
+    month = date.today().strftime("%Y.%m")
+    monkeypatch.setattr(pushit, "_git_lines", _fake_git(
+        tags=[f"exp1-{month}.000"], branch=True, prev_urls={"SST": "u"}
+    ))
+    out = _check_upload_output(tmp_path, monkeypatch, capsys, subdir)
+    lines = [ln.strip() for ln in out.splitlines()]
+    assert "git switch eval-exp1" in lines
+    assert "git switch -c eval-exp1" not in lines
+    assert any(ln.startswith(f"git tag -a exp1-{month}.001 ") for ln in lines)
+    assert f"git push origin exp1-{month}.001" in lines
+    assert "WARNING" not in out
+
+
+def test_check_upload_rerun_warns_when_restore_skipped(tmp_path, monkeypatch, capsys, om3_identity):
+    """Notebooks in the last tag but not in this render mean restore was skipped."""
+    from datetime import date
+    month = date.today().strftime("%Y.%m")
+    monkeypatch.setattr(pushit, "_git_lines", _fake_git(
+        tags=[f"exp1-{month}.000"], branch=True, prev_urls={"SST": "u", "MLD": "u"}
+    ))
+    out = _check_upload_output(tmp_path, monkeypatch, capsys, "")
+    assert "WARNING: 1 notebook(s)" in out
+    assert "MLD" in out
+    assert "mkfigs.restore" in out
+
+
 # ---------------------------------------------------------------------------
 # per-notebook docs page: co-authors from git history at any depth
 # ---------------------------------------------------------------------------
@@ -201,3 +286,16 @@ def test_mkmd_coauthors_found_at_any_depth(tmp_path, monkeypatch, subdir, cm3_id
     assert "Ada Author" in md
     assert "unknown" not in md
     assert "Evaluation figures from ACCESS-CM3 experiment" in md
+
+
+@pytest.mark.parametrize("ename", [
+    "MC_25km_jra_iaf+wombatlite_bs1-mpudig-backscat1-4c21c151",  # longest published OM3 ENAME
+    "25km-iaf-test-for-AK-expt-7df5ef4c",
+    "cm3-run-27-07-2026-PD-control",
+])
+def test_render_branch_is_a_valid_git_branch_name(ename):
+    """Real OM3/CM3 ENAMEs (with '+', '_', long hashes) make legal eval- branch names."""
+    branch = pushit.render_branch(ename)
+    assert branch == f"eval-{ename}"
+    r = subprocess.run(["git", "check-ref-format", "--branch", branch], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
