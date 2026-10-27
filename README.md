@@ -121,7 +121,13 @@ export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs
 
 6. Log in to Figshare and publish the article.
 7. `python3 -m mkfigs.pushit --check-figshare-upload`, then run the `git` commands it prints. These
-   commit the docs pages and create a tag named `<ENAME>-YYYY.MM.NNN`.
+   commit the docs pages on a branch named `eval-<ENAME>` (not `main`), create a tag named
+   `<ENAME>-YYYY.MM.NNN` on that commit, push both, and switch back to `main`.
+
+   The commit stays off `main` because it includes the notebooks as papermill ran them (with the
+   injected `# Parameters` cell), which breaks interactive use and causes merge conflicts for anyone
+   editing a notebook ([#8](https://github.com/ACCESS-NRI/access-model-mkfigs/issues/8)). The
+   ReadTheDocs version is built from the tag, so it does not matter which branch the tag is on.
 
 ## Workflow: add or re-run notebooks for an existing experiment
 
@@ -134,7 +140,10 @@ python3 -m mkfigs.restore                  # downloads the previously published 
 
 Then edit the notebook `array` in `mkfigs.sh` (add new notebooks, or keep only the ones to re-run)
 and continue from step 4 above. `pushit` merges new results with the restored ones; new results
-take priority.
+take priority. At step 7, `--check-figshare-upload` sees the earlier tag and the existing `eval-<ENAME>`
+branch, so it prints `git switch eval-<ENAME>` and the next tag (e.g. `…2026.07.000` → `…2026.07.001`;
+the serial restarts at `000` in a new month). It warns if notebooks from the earlier tag are
+missing from this render, which usually means `mkfigs.restore` was skipped.
 
 ## Command reference
 
