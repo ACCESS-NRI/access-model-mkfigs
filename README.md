@@ -48,7 +48,7 @@ stop-gap until the package is available in the `conda/analysis3` environment.
 ## One-off setup
 
 ```bash
-# 1. Figshare personal token (Figshare > Applications and API > Personal tokens)
+# 1. Figshare personal token (Figshare >  user icon in the upper right > Integrations > Personal tokens > Create personal token)
 echo "<your-token>" > ~/.figshare_token && chmod 600 ~/.figshare_token
 #    (or export FIGSHARE_TOKEN=<your-token>)
 
