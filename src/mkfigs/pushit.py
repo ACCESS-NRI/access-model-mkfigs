@@ -528,13 +528,60 @@ def _check_figshare_urls(all_urls: dict[str, str]) -> bool:
     return all_ok
 
 
+def _git_lines(*args: str) -> list[str]:
+    """Run git in REPO and return its stdout lines; [] if git fails or is unavailable."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(REPO), *args], capture_output=True, text=True,
+            timeout=60, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return r.stdout.splitlines() if r.returncode == 0 else []
+
+
+def _render_tags(ename: str) -> list[str]:
+    """Earlier render tags ``<ename>-YYYY.MM.NNN``, local and on origin, oldest first."""
+    found = set(_git_lines("tag", "-l", f"{ename}-*"))
+    for line in _git_lines("ls-remote", "--tags", "origin", f"refs/tags/{ename}-*"):
+        found.add(line.split("refs/tags/", 1)[-1].removesuffix("^{}"))
+    pattern = re.compile(re.escape(ename) + r"-\d{4}\.\d{2}\.\d{3}")
+    return sorted(t for t in found if pattern.fullmatch(t))
+
+
+def _next_render_tag(ename: str, today: date, existing: list[str]) -> str:
+    """``<ename>-YYYY.MM.NNN`` with NNN one more than this month's highest, else 000."""
+    prefix = f"{ename}-{today.strftime('%Y.%m')}."
+    serials = [int(t[len(prefix):]) for t in existing if t.startswith(prefix)]
+    return f"{prefix}{max(serials) + 1 if serials else 0:03d}"
+
+
+# Paper repos already name ordinary branches after runs (e.g. cm3-run-27-07-2026),
+# so the prefix keeps render branches from colliding with people's work.
+RENDER_BRANCH_PREFIX = "eval-"
+
+
+def render_branch(ename: str) -> str:
+    """Branch that holds an experiment's render commits and tags."""
+    return f"{RENDER_BRANCH_PREFIX}{ename}"
+
+
+def _branch_exists(branch: str) -> bool:
+    """True if ``branch`` exists locally or on origin."""
+    return bool(
+        _git_lines("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+        or _git_lines("ls-remote", "--heads", "origin", f"refs/heads/{branch}")
+    )
+
+
 def check_figshare_upload_mode(ename: str) -> None:
     """--check-figshare-upload: verify all Figshare URLs then print git commands.
 
     Run this after publishing the Figshare article.  Reads notebook URLs from
     notebooks_urls.json and image URLs embedded in the per-notebook .md files,
     checks every URL is publicly accessible, and only then prints the full git
-    commit/tag/push commands needed to finish the workflow.
+    commit/tag/push commands needed to finish the workflow. The commit and tag
+    go on the experiment's ``eval-<ename>`` branch, never on main.
     """
     experiment_docs_dir = DOCS_PAGES / "experiments" / ename
     all_urls: dict[str, str] = {}
@@ -584,13 +631,35 @@ def check_figshare_upload_mode(ename: str) -> None:
         and (experiment_docs_dir / f"{nb}.md").exists()
     ]
 
-    today = date.today()
-    tag = f"{ename}-{today.strftime('%Y.%m')}.000"
+    # A re-render of an already-published experiment gets the next serial
+    # (…000 → …001) rather than clashing with the existing tag.
+    prev_tags = _render_tags(ename)
+    tag = _next_render_tag(ename, date.today(), prev_tags)
+    urls_json_rel = f"documentation/docs/pages/experiments/{ename}/notebooks_urls.json"
+    if prev_tags:
+        # Cross-check that mkfigs.restore was run: without it, notebooks from the
+        # last published render would silently drop out of the new one.
+        prev = prev_tags[-1]
+        try:
+            prev_nbs = json.loads("\n".join(_git_lines("show", f"{prev}:{urls_json_rel}")) or "{}")
+        except json.JSONDecodeError:
+            prev_nbs = {}
+        now_nbs = json.loads(urls_json.read_text()) if urls_json.exists() else {}
+        missing = sorted(nb for nb in prev_nbs if not nb.startswith("_") and nb not in now_nbs)
+        print(f"Experiment already published as {prev}; this render will be tagged {tag}.")
+        if missing:
+            print(f"\n*** WARNING: {len(missing)} notebook(s) in {prev} are missing from this render:")
+            for nb in missing:
+                print(f"      {nb}")
+            print("    Did you start from that tag and run `python3 -m mkfigs.restore` before qsub?")
+            print("    If not, they will disappear from the new site. ***\n")
+    branch = render_branch(ename)
+    branch_cmd = f"git switch {branch}" if _branch_exists(branch) else f"git switch -c {branch}"
+
     rtd_slug = re.sub(r'[^a-z0-9-]+', '-', tag.lower()).strip('-')
     rtd_url  = f"{get_docs_url()}en/{rtd_slug}/"
     tag_msg  = f"Evaluation figures for {ename}. Rendered site (after RTD builds tag): {rtd_url}"
 
-    urls_json_rel = f"documentation/docs/pages/experiments/{ename}/notebooks_urls.json"
     # Relative to REPO: notebooks/<nb>.ipynb for access-om3-paper-1,
     # notebooks/polished-python/<nb>.ipynb for access-cm3-paper-1.
     added_files = [str((HERE / f"{nb}.ipynb").relative_to(REPO)) for nb in ok_nbs]
@@ -606,16 +675,21 @@ def check_figshare_upload_mode(ename: str) -> None:
         ".readthedocs.yaml",
     ]
 
+    # The commit goes on an eval-<ename> branch, not main: it
+    # contains the papermill-modified notebooks, which break interactive use and
+    # cause merge conflicts if they land on main (access-model-mkfigs#8).
     print("Run the following to commit, tag, and push:\n")
     print(f"  cd {REPO}")
+    print(f"  {branch_cmd}")
     print(f"  git add {' '.join(added_files)}")
     print( "  #")
     print(f"  #  Recommended that you -- git add {(HERE / 'mkfigs.sh').relative_to(REPO)} too")
     print( "  #")
     print(f'  git commit -m "docs: render evaluation figures for {ename}"')
     print(f"  git tag -a {tag} -m '{tag_msg}'")
-    print( "  git push origin main --tags")
-    print( "  git push")
+    print(f"  git push -u origin {branch}")
+    print(f"  git push origin {tag}")
+    print( "  git switch main    # puts the un-rendered notebooks back in your working tree")
     print( "\n  Horray!")
     print()
 
