@@ -1361,13 +1361,28 @@ def main() -> None:
     # Next step: publish on Figshare, then get git commands
     # -----------------------------------------------------------------------
     print()
-    print("Files uploaded to Figshare and copied into the docs tree.")
-    print()
-    print("Next steps:")
-    print("  1. Go to Figshare and PUBLISH the article so all URLs become public.")
-    print("  2. Verify and get git commands by running:")
     _ename_flag = f" --ename {ename}" if args.ename else ""
-    print(f"       mkfigs-pushit --check-figshare-upload{_ename_flag}")
+
+    if args.dry_run:
+        print("DRY RUN complete. No files uploaded or copied.")
+        print("Next step: run mkfigs-pushit without --dry-run to upload.")
+    elif args.skip_figshare:
+        print("Documentation updated locally. Figshare upload skipped.")
+        print("No Figshare article was published.")
+    else:
+        print("Files uploaded to Figshare and copied into the docs tree.")
+        print()
+        print("Next steps:")
+        print(
+            f"  1. Check private upload integrity:\n"
+            f"     mkfigs-pushit --check-figshare-integrity{_ename_flag}"
+        )
+        print(" 2. Publish the article on Figshare.")
+        print(
+            f"  3. Check public links:\n"
+            f"     mkfigs-pushit --check-figshare-upload{_ename_flag}"
+        )
+
     print()
 
 

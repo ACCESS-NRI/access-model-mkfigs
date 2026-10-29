@@ -356,3 +356,32 @@ def test_check_figshare_upload_succeeds_and_prints_git_commands(
     assert "git commit" in out
     assert "git tag" in out
     assert "notebooks/SST.ipynb" in out
+
+
+def test_dry_run_reports_correct_message(patch_repo_paths, fake_figshare, capsys):
+    repo = patch_repo_paths
+    _seed_notebook_outputs(repo, "test_experiment_01", ["SST"])
+
+    _run_pushit(["--dry-run"])
+
+    output = capsys.readouterr().out
+
+    assert "DRY RUN complete" in output
+    assert "No files uploaded or copied" in output
+    assert "Files uploaded to Figshare and copied" not in output
+    assert "Go to Figshare and PUBLISH" not in output
+    assert fake_figshare._articles == {}
+
+
+def test_skip_figshare_reports_correct_message(patch_repo_paths, fake_figshare, capsys):
+    repo = patch_repo_paths
+    _seed_notebook_outputs(repo, "test_experiment_01", ["SST"])
+
+    _run_pushit(["--skip-figshare"])
+
+    output = capsys.readouterr().out
+    assert "Documentation updated locally" in output
+    assert "Figshare upload skipped" in output
+    assert "Files uploaded to Figshare" not in output
+    assert "Go to Figshare and PUBLISH" not in output
+    assert fake_figshare._articles == {}
