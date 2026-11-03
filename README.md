@@ -114,8 +114,9 @@ export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs
 
    | Status | Meaning |
    |---|---|
-   | `OK (n PNGs)` | ran and produced figures; will be uploaded |
-   | `FAILED (no PNGs or markdown)` | errored (see `mkfigs_errors.log`) **or** ran but saved no figures |
+   | `OK (n PNGs)` | ran to the end without errors and produced figures; will be uploaded |
+   | `FAILED (execution error)` | the rendered notebook records an error, or the run stopped early; any figures it saved first are **not** uploaded. The reason is printed on the next line (full traceback in `mkfigs_errors.log`) |
+   | `FAILED (no PNGs or markdown)` | ran without errors but saved no figures |
    | `NOT RUN` | in the `array` but no output from this run |
    | `PREV COMMITTED` | not in this run; kept from the last published version |
 

@@ -17,7 +17,7 @@ import pytest
 
 from mkfigs import pushit
 
-from .conftest import make_png, make_rendered_notebook
+from .conftest import make_papermill_notebook, make_png, make_rendered_notebook
 
 
 def _seed_notebook_outputs(repo: Path, ename: str, notebooks: list[str]):
@@ -385,3 +385,121 @@ def test_skip_figshare_reports_correct_message(patch_repo_paths, fake_figshare, 
     assert "Files uploaded to Figshare" not in output
     assert "Go to Figshare and PUBLISH" not in output
     assert fake_figshare._articles == {}
+
+
+# ---------------------------------------------------------------------------
+# Run success is read from the rendered notebook, not inferred from outputs
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kwargs, expected", [
+    ({}, None),
+    ({"error": (1, "ValueError", "boom")}, "In [2] ValueError: boom"),
+    ({"error": (1, "SystemExit", "0")}, None),  # deliberate early exit; papermill exits 0
+    ({"error": (1, "SystemExit", "1")}, "In [2] SystemExit: 1"),
+    ({"n_ran": 1}, "2 code cell(s) never ran"),  # kernel died: no error output at all
+    ({"finished": False}, "did not finish"),  # job killed: no end_time
+])
+def test_notebook_execution_error_follows_papermill_record(tmp_path, kwargs, expected):
+    """Each papermill outcome maps to OK (None) or a one-line FAILED reason."""
+    rendered = tmp_path / "SST_rendered.ipynb"
+    make_papermill_notebook(rendered, **kwargs)
+    reason = pushit.notebook_execution_error(rendered)
+    if expected is None:
+        assert reason is None
+    else:
+        assert expected in reason
+
+
+def test_notebook_execution_error_skip_execution_and_unreadable(tmp_path):
+    """A cell nbclient skips by tag is not "never ran"; a truncated file is a failure."""
+    skipped = tmp_path / "skip_rendered.ipynb"
+    make_papermill_notebook(skipped, n_ran=2)
+    nb = json.loads(skipped.read_text())
+    nb["cells"][2]["metadata"]["tags"] = ["skip-execution"]
+    skipped.write_text(json.dumps(nb))
+    assert pushit.notebook_execution_error(skipped) is None
+
+    truncated = tmp_path / "trunc_rendered.ipynb"
+    truncated.write_text('{"cells": [')
+    assert "unreadable" in pushit.notebook_execution_error(truncated)
+
+
+def test_notebook_that_errors_after_saving_figures_is_failed_not_uploaded(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """MLD saves a PNG and its markdown, then raises. Those partial outputs
+    used to make it OK (uploaded, copied, in the nav). It must be FAILED with
+    nothing of it published, while SST, which ran cleanly, is unaffected.
+    """
+    repo = patch_repo_paths
+    ename = "test_experiment_01"
+    ofol, _ = _seed_notebook_outputs(repo, ename, ["SST", "MLD"])
+    make_papermill_notebook(ofol / "MLD_rendered.ipynb", error=(1, "ValueError", "boom after figure 1"))
+
+    _run_pushit([])
+
+    out = capsys.readouterr().out
+    assert "FAILED  (execution error)" in out
+    assert "In [2] ValueError: boom after figure 1" in out
+
+    exp_docs = repo / "documentation" / "docs" / "pages" / "experiments" / ename
+    index_md = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
+    assert "| `MLD` | ❌ No |" in index_md
+    assert "| `SST` | ✅ Yes |" in index_md
+    assert not (exp_docs / "MLD.md").exists()
+    assert not (repo / "notebooks" / "MLD.ipynb").exists()
+    urls = json.loads((exp_docs / "notebooks_urls.json").read_text())
+    assert "SST" in urls and "MLD" not in urls
+    assert "MLD" not in urls["_run_times"]
+    uploaded = {f["name"] for aid in fake_figshare._articles for f in fake_figshare.files_for(aid)}
+    assert "SST_rendered.ipynb" in uploaded
+    assert not any(name.startswith("MLD") for name in uploaded)
+    assert f"{ename}/MLD.md" not in (repo / "documentation" / "mkdocs.yml").read_text()
+
+
+def test_rerun_failure_of_published_notebook_is_failed_not_prev_committed(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """MLD is already published (in notebooks_urls.json) and errors on re-run
+    before saving any new PNG. That used to show as PREV COMMITTED, hiding the
+    failure; it is now FAILED, and its published URL is kept, not dropped.
+    """
+    repo = patch_repo_paths
+    ename = "test_experiment_01"
+    ofol, _ = _seed_notebook_outputs(repo, ename, ["SST"])
+    make_papermill_notebook(ofol / "MLD_rendered.ipynb", error=(0, "KeyError", "'thetao'"))
+    exp_docs = repo / "documentation" / "docs" / "pages" / "experiments" / ename
+    exp_docs.mkdir(parents=True)
+    old_url = "https://ndownloader.figshare.com/files/4242"
+    (exp_docs / "notebooks_urls.json").write_text(json.dumps({"MLD": old_url}))
+
+    _run_pushit(["--skip-figshare"])
+
+    out = capsys.readouterr().out
+    assert "OK: 1   FAILED: 1   NOT RUN: 0   PREV COMMITTED: 0" in out
+    index_md = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
+    assert "| `MLD` | ❌ No |" in index_md
+    assert json.loads((exp_docs / "notebooks_urls.json").read_text())["MLD"] == old_url
+
+
+def test_check_figshare_integrity_skips_failed_notebook(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """pushit never uploads a FAILED notebook, so the integrity check must not
+    then expect its partial PNG and report it MISSING.
+    """
+    repo = patch_repo_paths
+    ename = "test_experiment_01"
+    ofol, mdfol = _seed_notebook_outputs(repo, ename, ["SST", "MLD"])
+    make_papermill_notebook(ofol / "MLD_rendered.ipynb", error=(1, "ValueError", "boom"))
+
+    uploader = pushit.FigshareUploader(figshare_token, ename, str(mdfol))
+    article_id = uploader._get_or_create_article()
+    fake_figshare.seed_file(article_id, "SST_rendered.ipynb", (ofol / "SST_rendered.ipynb").read_bytes())
+    fake_figshare.seed_file(article_id, "SST_01.png", (mdfol / "SST_01.png").read_bytes())
+
+    _run_pushit(["--check-figshare-integrity"])  # must not raise/exit
+
+    out = capsys.readouterr().out
+    assert "safe to publish" in out.lower()
+    assert "MLD" not in out
