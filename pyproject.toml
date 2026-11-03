@@ -53,7 +53,7 @@ mkfigs-preview-branch = "mkfigs.preview_branch:main"
 
 [project.urls]
 bugs = "https://github.com/ACCESS-NRI/access-model-mkfigs/issues"
-changelog = "https://github.com/ACCESS-NRI/access-model-mkfigs/blob/main/HISTORY.rst"
+changelog = "https://github.com/ACCESS-NRI/access-model-mkfigs/blob/master/HISTORY.rst"
 homepage = "https://github.com/ACCESS-NRI/access-model-mkfigs"
 
 [tool.setuptools]

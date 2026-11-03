@@ -274,3 +274,16 @@ coverage report -m
 
 See [`tests/README.md`](tests/README.md) for a detailed walkthrough — running
 individual tests, the layered structure, and the opt-in live Figshare layer.
+
+
+## Releasing
+
+Releases are managed manually through GitHub. Downstream paper repositories ([access-om3-paper-1](https://github.com/ACCESS-Community-Hub/access-om3-paper-1) and [access-cm3-paper-1](https://github.com/ACCESS-Community-Hub/access-cm3-paper-1)) use `access-model-mkfigs` as a Git submodule, so PyPI or Conda publishing is not currently required.
+
+1. Update the version in `pyproject.toml` and `src/mkfigs/__init__.py`, and update `HISTORY.rst`.
+2. Open a PR against `master` and ensure CI passes before merging.
+3. Go to [GitHub Releases](https://github.com/ACCESS-NRI/access-model-mkfigs/releases/new).
+4. Create a new tag (e.g. `v0.1.0`) targeting `master`.
+5. Generate and review the release notes, then publish the release.
+
+Published tags should not be moved or overwritten. Downstream paper repositories can update their submodule to the released tag.
