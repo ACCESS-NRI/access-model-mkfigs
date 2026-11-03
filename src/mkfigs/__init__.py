@@ -33,8 +33,8 @@ def get_mkfigs_version() -> str:
     which says nothing about the commit that ran.
 
     Order:
-      1. ``git describe`` of this file's checkout -> tag (e.g. "v0.2.0"), or
-         "v0.2.0-3-gabc1234", or "git+abc1234" when no tags exist; "-dirty"
+      1. ``git describe`` of this file's checkout -> tag (e.g. "v0.1.0"), or
+         "v0.1.0-3-gabc1234", or "git+abc1234" when no tags exist; "-dirty"
          appended if uncommitted changes are present.
       2. Installed metadata, but only if that distribution owns this file;
          a VCS install's commit is appended ("0.1.0+abc1234").
