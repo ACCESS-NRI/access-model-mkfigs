@@ -385,3 +385,57 @@ def test_skip_figshare_reports_correct_message(patch_repo_paths, fake_figshare, 
     assert "Files uploaded to Figshare" not in output
     assert "Go to Figshare and PUBLISH" not in output
     assert fake_figshare._articles == {}
+
+
+def _seed_rerun(repo, fake_figshare, figshare_token, ename):
+    """SST re-rendered this run; MLD published earlier, so its files are on
+    Figshare and linked from the docs pages, but are not in the local output."""
+    ofol, mdfol = _seed_notebook_outputs(repo, ename, ["SST"])
+    uploader = pushit.FigshareUploader(figshare_token, ename, str(mdfol))
+    article_id = uploader._get_or_create_article()
+    fake_figshare.seed_file(article_id, "SST_rendered.ipynb",
+                            (ofol / "SST_rendered.ipynb").read_bytes())
+    fake_figshare.seed_file(article_id, "SST_01.png", (mdfol / "SST_01.png").read_bytes())
+    nb_id = fake_figshare.seed_file(article_id, "MLD_rendered.ipynb", b"old notebook")
+    png_id = fake_figshare.seed_file(article_id, "MLD_01.png", b"old png")
+
+    docs = repo / "documentation" / "docs" / "pages" / "experiments" / ename
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "notebooks_urls.json").write_text(json.dumps({
+        "MLD": f"https://ndownloader.figshare.com/files/{nb_id}",
+        "_run_times": {"MLD": "2026-07-28 03:13 UTC"},
+    }))
+    (docs / "MLD.md").write_text(
+        f"# MLD\n\n![fig](https://ndownloader.figshare.com/files/{png_id})\n"
+    )
+    return article_id
+
+
+def test_check_figshare_integrity_rerun_accepts_files_linked_from_docs(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """After mkfigs.restore, earlier renders' files that the docs still link
+    to are expected on the article, not EXTRA."""
+    _seed_rerun(patch_repo_paths, fake_figshare, figshare_token, "test_experiment_01")
+
+    _run_pushit(["--check-figshare-integrity"])  # must not exit
+
+    out = capsys.readouterr().out
+    assert "EXTRA" not in out
+    assert "KEPT      2 file(s)" in out
+    assert "safe to publish" in out.lower()
+
+
+def test_check_figshare_integrity_rerun_still_flags_unlinked_files(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """A file no docs page links to is still a real extra."""
+    article_id = _seed_rerun(patch_repo_paths, fake_figshare, figshare_token, "test_experiment_01")
+    fake_figshare.seed_file(article_id, "Orphan_01.png", b"orphan")
+
+    with pytest.raises(SystemExit) as exc:
+        _run_pushit(["--check-figshare-integrity"])
+    assert exc.value.code != 0
+    out = capsys.readouterr().out
+    assert "EXTRA     Orphan_01.png" in out
+    assert "MLD_01.png" not in out

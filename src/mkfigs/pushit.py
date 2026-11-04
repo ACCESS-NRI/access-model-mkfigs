@@ -621,6 +621,22 @@ def check_figshare_upload_mode(ename: str) -> None:
     print()
 
 
+def _docs_linked_file_ids(experiment_docs_dir: Path) -> set[str]:
+    """Figshare file ids the experiment's docs pages link to: notebooks in
+    notebooks_urls.json and images in the per-notebook .md files."""
+    text = "\n".join(p.read_text() for p in experiment_docs_dir.glob("*.md"))
+    urls_json = experiment_docs_dir / "notebooks_urls.json"
+    if urls_json.exists():
+        try:
+            text += "\n" + "\n".join(
+                str(v) for k, v in json.loads(urls_json.read_text()).items()
+                if not k.startswith("_")
+            )
+        except json.JSONDecodeError:
+            pass
+    return set(re.findall(r"https://ndownloader\.figshare\.com/files/(\d+)", text))
+
+
 def _classify_duplicates(entries: list[dict], local_md5: str):
     """Given 2+ remote file entries sharing one name, decide what's safe
     to clean up automatically. Ported from the standalone verify_uploads.py
@@ -772,6 +788,12 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
             pending.append(fname)
 
     extra = sorted(set(by_name) - set(local_names))
+    # On a re-run after mkfigs.restore, files from earlier renders stay on the
+    # article because the docs pages for PREV COMMITTED notebooks still link to
+    # them. Those are expected; only unlinked files are real extras.
+    linked_ids = _docs_linked_file_ids(DOCS_PAGES / "experiments" / ename)
+    kept = [n for n in extra if any(str(e.get("id")) in linked_ids for e in by_name[n])]
+    extra = [n for n in extra if n not in kept]
 
     dup_report = []
     for fname, local_md5 in sorted(local_names.items()):
@@ -786,6 +808,9 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
             print(f"  {label:9s} {n}")
     for n in extra:
         print(f"  EXTRA     {n}  (on Figshare, no local file with this name)")
+    if kept:
+        print(f"  KEPT      {len(kept)} file(s) from earlier renders, still linked "
+              f"from the docs pages (expected on a re-run)")
     for fname, action, ids, note in dup_report:
         tag = {"delete_stubs": "DUP-STUB", "delete_older_dupes": "DUP-OLD ",
                "stale_duplicates": "DUP-STALE", "conflicting": "DUP-CONFLICT"}[action]
