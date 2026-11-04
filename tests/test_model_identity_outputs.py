@@ -154,14 +154,16 @@ def _check_upload_output(tmp_path, monkeypatch, capsys, subdir):
 def test_check_upload_paths_om3(tmp_path, monkeypatch, capsys, om3_identity):
     out = _check_upload_output(tmp_path, monkeypatch, capsys, "")
     assert "git add notebooks/SST.ipynb " in out
-    assert "https://access-om3-paper-1.readthedocs.io/en/" in out
+    assert "https://access-om3-paper-1.readthedocs.io/exp1-" in out
+    assert "/en/" not in out
 
 
 def test_check_upload_paths_cm3(tmp_path, monkeypatch, capsys, cm3_identity):
     out = _check_upload_output(tmp_path, monkeypatch, capsys, "polished-python")
     assert "git add notebooks/polished-python/SST.ipynb " in out
     assert "git add notebooks/SST.ipynb" not in out
-    assert "https://access-cm3-paper-1.readthedocs.io/en/" in out
+    assert "https://access-cm3-paper-1.readthedocs.io/exp1-" in out
+    assert "/en/" not in out
     assert "om3" not in out.lower()
 
 
@@ -299,3 +301,16 @@ def test_render_branch_is_a_valid_git_branch_name(ename):
     assert branch == f"eval-{ename}"
     r = subprocess.run(["git", "check-ref-format", "--branch", branch], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("tag,slug", [
+    # Real tags and the version slugs ReadTheDocs gave them.
+    ("MC_25km_jra_iaf+wombatlite-test4-d28e0359-2026.11.000",
+     "mc_25km_jra_iafwombatlite-test4-d28e0359-2026.11.000"),
+    ("MC_25km-iaf-test-for-AK-expt-7df5ef4c-2026.07.000",
+     "mc_25km-iaf-test-for-ak-expt-7df5ef4c-2026.07.000"),
+    ("MC_25km_jra_iaf-1.0-beta-gm1-d968c801-2026.07.000",
+     "mc_25km_jra_iaf-1.0-beta-gm1-d968c801-2026.07.000"),
+])
+def test_rtd_version_url_matches_readthedocs_slug(tag, slug, om3_identity):
+    assert pushit.rtd_version_url(tag) == f"https://access-om3-paper-1.readthedocs.io/{slug}/"

@@ -575,6 +575,18 @@ def _branch_exists(branch: str) -> bool:
     )
 
 
+def rtd_version_url(tag: str) -> str:
+    """ReadTheDocs URL of the site built from ``tag``.
+
+    RTD makes the version slug by lowercasing the tag and dropping every
+    character outside ``a-z0-9._-`` (``MC_25km_jra_iaf+wombatlite-...-2026.07.000``
+    becomes ``mc_25km_jra_iafwombatlite-...-2026.07.000``). The paper-repo RTD
+    projects use "multiple versions without translations", so there is no
+    ``/en/`` before the slug.
+    """
+    return f"{get_docs_url()}{re.sub(r'[^a-z0-9._-]', '', tag.lower())}/"
+
+
 def check_figshare_upload_mode(ename: str) -> None:
     """--check-figshare-upload: verify all Figshare URLs then print git commands.
 
@@ -657,8 +669,7 @@ def check_figshare_upload_mode(ename: str) -> None:
     branch = render_branch(ename)
     branch_cmd = f"git switch {branch}" if _branch_exists(branch) else f"git switch -c {branch}"
 
-    rtd_slug = re.sub(r'[^a-z0-9-]+', '-', tag.lower()).strip('-')
-    rtd_url  = f"{get_docs_url()}en/{rtd_slug}/"
+    rtd_url  = rtd_version_url(tag)
     tag_msg  = f"Evaluation figures for {ename}. Rendered site (after RTD builds tag): {rtd_url}"
 
     # Relative to REPO: notebooks/<nb>.ipynb for access-om3-paper-1,
