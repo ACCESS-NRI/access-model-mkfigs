@@ -494,3 +494,48 @@ def make_rendered_notebook(path: Path, cell_text: str = "print('ok')") -> None:
         "nbformat": 4, "nbformat_minor": 5,
     }
     path.write_text(json.dumps(nb))
+
+
+def make_papermill_notebook(
+    path: Path,
+    n_cells: int = 3,
+    error: tuple[int, str, str] | None = None,
+    n_ran: int | None = None,
+    finished: bool = True,
+) -> None:
+    """Write a notebook shaped like papermill's output, i.e. what mkfigs-run leaves behind.
+
+    *error* = (cell index, ename, evalue) gives that cell an error output and
+    papermill's exception flag, and leaves the cells after it unexecuted,
+    as papermill does when a cell raises. *n_ran* leaves cells from that
+    index on unexecuted with no error (kernel died / cell timed out), and
+    *finished=False* leaves end_time unset (job killed mid-notebook).
+    """
+    if n_ran is None:
+        n_ran = error[0] + 1 if error else n_cells
+    cells = []
+    for i in range(n_cells):
+        cell = {
+            "cell_type": "code", "source": [f"step_{i}()"], "outputs": [],
+            "execution_count": i + 1 if i < n_ran else None,
+            "metadata": {"papermill": {"exception": None, "status": "completed"}},
+        }
+        if error and i == error[0]:
+            ename, evalue = error[1], error[2]
+            cell["outputs"] = [{"output_type": "error", "ename": ename, "evalue": evalue,
+                                "traceback": [f"{ename}: {evalue}"]}]
+            cell["metadata"]["papermill"].update(exception=True, status="failed")
+        cells.append(cell)
+    nb = {
+        "cells": cells,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3 (ipykernel)", "name": "python3"},
+            "papermill": {
+                "start_time": "2026-11-03T00:00:00",
+                "end_time": "2026-11-03T00:05:00" if finished else None,
+                "exception": True if error else None,
+            },
+        },
+        "nbformat": 4, "nbformat_minor": 5,
+    }
+    path.write_text(json.dumps(nb))
