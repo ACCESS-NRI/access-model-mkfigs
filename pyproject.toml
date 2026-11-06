@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "setuptools>=80", 
+    "setuptools>=80",
     "setuptools-scm[simple]>=8",
 ]
 build-backend = "setuptools.build_meta"
@@ -44,8 +44,9 @@ dev = [
     "jinja2",  # category-heading template rendering tests
     "markdown",  # category-heading anchor rendering tests
     "responses",  # mocks requests.request/.put for the Figshare-API test double in tests/conftest.py
-    "ruff"  # linting
-    ]
+    "ruff",  # linting
+    "pre-commit",   # pre-commit hooks
+]
 
 [project.scripts]
 mkfigs-run     = "mkfigs.run:main"
