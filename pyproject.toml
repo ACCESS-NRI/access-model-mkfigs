@@ -1,10 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = [
+    "setuptools>=80",
+    "setuptools-scm[simple]>=8",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "access-model-mkfigs"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Evaluation figure workflow tools for ACCESS model paper repositories"
 readme = "README.md"
 authors = [
@@ -41,8 +44,9 @@ dev = [
     "jinja2",  # category-heading template rendering tests
     "markdown",  # category-heading anchor rendering tests
     "responses",  # mocks requests.request/.put for the Figshare-API test double in tests/conftest.py
-    "ruff"  # linting
-    ]
+    "ruff",  # linting
+    "pre-commit",   # pre-commit hooks
+]
 
 [project.scripts]
 mkfigs-run     = "mkfigs.run:main"
@@ -53,7 +57,7 @@ mkfigs-preview-branch = "mkfigs.preview_branch:main"
 
 [project.urls]
 bugs = "https://github.com/ACCESS-NRI/access-model-mkfigs/issues"
-changelog = "https://github.com/ACCESS-NRI/access-model-mkfigs/blob/main/HISTORY.rst"
+changelog = "https://github.com/ACCESS-NRI/access-model-mkfigs/blob/master/HISTORY.rst"
 homepage = "https://github.com/ACCESS-NRI/access-model-mkfigs"
 
 [tool.setuptools]
@@ -75,3 +79,7 @@ omit = [
     "*/_version.py",
     "*/data/__init__.py",
 ]
+
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
+local_scheme = "node-and-date"
