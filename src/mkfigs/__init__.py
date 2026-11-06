@@ -12,7 +12,9 @@ Public API for use in analysis notebooks:
 
 __author__ = "ACCESS-NRI and contributors"
 __email__ = "chris.bull@anu.edu.au"
-__version__ = "0.1.0"
+
+from importlib.metadata import version
+__version__ = version(__package__)
 
 from .configdoc import (  # noqa: F401
     MkmdWriter,
