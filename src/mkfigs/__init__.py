@@ -13,8 +13,11 @@ Public API for use in analysis notebooks:
 __author__ = "ACCESS-NRI and contributors"
 __email__ = "chris.bull@anu.edu.au"
 
-from importlib.metadata import version
-__version__ = version(__package__)
+from importlib.metadata import version, PackageNotFoundError
+try:
+    __version__ = version("access-model-mkfigs")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 from .configdoc import (  # noqa: F401
     MkmdWriter,
