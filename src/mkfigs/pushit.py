@@ -49,6 +49,7 @@ from . import get_mkfigs_version
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
 from .configdoc import get_docs_url, get_model_name, get_repo_slug, get_repo_url
 from ._paths import find_notebooks_dir, find_repo_root
+from .run import MKFIGS_METADATA_KEY
 
 
 def _check_nci_environment() -> None:
@@ -290,6 +291,97 @@ def _mkfigs_version_md(version: str) -> str:
     return f"{link} (+ local changes)" if m["dirty"] else link
 
 
+# ---------------------------------------------------------------------------
+# Execution-time mkfigs version per notebook (#38)
+# ---------------------------------------------------------------------------
+UNKNOWN_VERSION = "unknown"
+
+# mkfigs_run.log lines written by mkfigs.run.main(), after the
+# "<asctime> <levelname>" prefix:
+#   access-model-mkfigs   : v0.2.0-3-gabc1234
+#   START  SST
+_LOG_VERSION_RE = re.compile(r"\saccess-model-mkfigs\s+:\s+(?P<version>\S+)\s*$")
+_LOG_START_RE = re.compile(r"\sSTART\s+(?P<nb>\S+)\s*$")
+
+
+def _rendered_notebook_version(rendered: Path) -> str | None:
+    """Return metadata.mkfigs.version from a rendered notebook, or None."""
+    try:
+        meta = json.loads(rendered.read_text()).get("metadata", {})
+        version = meta.get(MKFIGS_METADATA_KEY, {}).get("version")
+    except Exception:
+        return None
+    return version if isinstance(version, str) and version else None
+
+
+def _run_log_versions(mdfol: Path) -> dict[str, str]:
+    """Map notebook -> mkfigs version from ``mkfigs_run.log``.
+
+    The log is appended to by every mkfigs-run job for the experiment, so
+    the last job that STARTed a notebook wins. Each job logs its version
+    before it starts any notebook.
+    """
+    try:
+        lines = (mdfol / "mkfigs_run.log").read_text(errors="replace").splitlines()
+    except OSError:
+        return {}
+    versions: dict[str, str] = {}
+    current: str | None = None
+    for line in lines:
+        if m := _LOG_VERSION_RE.search(line):
+            current = m["version"]
+        elif current and (m := _LOG_START_RE.search(line)):
+            versions[m["nb"]] = current
+    return versions
+
+
+def notebook_run_versions(ofol: Path, mdfol: Path, notebooks: list[str]) -> dict[str, str]:
+    """Return the access-model-mkfigs version that executed each notebook.
+
+    Sources, in order:
+      1. ``metadata.mkfigs.version`` in ``<ofol>/<nb>_rendered.ipynb``,
+         stamped by mkfigs-run (stamp_mkfigs_version).
+      2. ``<mdfol>/mkfigs_run.log``: covers outputs rendered by a
+         mkfigs-run that predates the stamp, e.g. when the submodule was
+         updated between mkfigs-run and mkfigs-pushit to pick up this change.
+      3. ``"unknown"``.
+
+    pushit's own version (get_mkfigs_version()) is deliberately not a
+    fallback. It describes the publishing step, not the run, so using it
+    is what produced the wrong versions in issue #38.
+    """
+    log_versions: dict[str, str] | None = None
+    versions: dict[str, str] = {}
+    for nb in notebooks:
+        version = _rendered_notebook_version(ofol / f"{nb}_rendered.ipynb")
+        if version is None:
+            if log_versions is None:
+                log_versions = _run_log_versions(mdfol)
+            version = log_versions.get(nb, UNKNOWN_VERSION)
+        versions[nb] = version
+    return versions
+
+
+def report_run_versions(run_versions: dict[str, str], pushit_version: str) -> None:
+    """Print which mkfigs version ran each notebook, flagging gaps and mismatches."""
+    if not run_versions:
+        return
+    by_version: dict[str, list[str]] = {}
+    for nb, version in run_versions.items():
+        by_version.setdefault(version, []).append(nb)
+    print("[mkfigs] access-model-mkfigs version that ran the notebooks to publish:")
+    for version, nbs in sorted(by_version.items()):
+        print(f"           {version:<24}  {', '.join(sorted(nbs))}")
+    if UNKNOWN_VERSION in by_version:
+        print("[mkfigs] WARNING: no version recorded for some notebooks (no metadata.mkfigs.version")
+        print("         in the rendered notebook and no entry in mkfigs_run.log); the run")
+        print(f"         summary will show '{UNKNOWN_VERSION}' for them.")
+    if set(by_version) - {pushit_version, UNKNOWN_VERSION}:
+        print(f"[mkfigs] NOTE: pushit itself is running from {pushit_version}; the run summary")
+        print("         records the version(s) above, which actually ran the notebooks.")
+    print()
+
+
 def build_run_summary(
     ename: str,
     esmdir: str,
@@ -303,11 +395,16 @@ def build_run_summary(
     mkfigs_version: str = "unknown",
     existing_run_versions: dict[str, str] | None = None,
     categories: dict[str, list[int | str]] | None = None,
+    run_versions: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """Return (plain_text_summary, markdown_summary).
 
     ``notebook_issues`` maps notebook stem to a Markdown GitHub issue string,
     loaded from mkfigs_issues.py in the paper repo's notebooks/ directory.
+
+    ``run_versions`` maps each notebook in ``ok_nbs`` to the mkfigs version
+    that executed it (see notebook_run_versions). ``mkfigs_version`` is used
+    only for OK notebooks missing from it.
 
     ``categories`` (optional, CATEGORIES in mkfigs_issues.py) splits the
     notebook table into one sub-headed table per category, with a "Jump to"
@@ -381,7 +478,7 @@ def build_run_summary(
 
     # Build per-notebook (date, version) lookup then group into table rows.
     _nb_times: dict[str, str] = {nb: ts for nb in ok_nbs}
-    _nb_versions: dict[str, str] = {nb: mkfigs_version for nb in ok_nbs}
+    _nb_versions: dict[str, str] = {nb: (run_versions or {}).get(nb, mkfigs_version) for nb in ok_nbs}
     for nb in prev_committed_nbs:
         _nb_times[nb] = (existing_run_times or {}).get(nb, "previously committed")
         _nb_versions[nb] = (existing_run_versions or {}).get(nb, "—")
@@ -1297,6 +1394,11 @@ def main() -> None:
             prev_committed_nbs.append(nb)
 
     print()
+    # The mkfigs version that executed each notebook, read from the run's own
+    # outputs; it can differ from mkfigs_version above if the submodule was
+    # updated between mkfigs-run and pushit (#38).
+    run_versions = notebook_run_versions(ofol, mdfol, ok_nbs)
+    report_run_versions(run_versions, mkfigs_version)
     notebook_issues = _load_notebook_issues(HERE)
     notebook_categories = _load_notebook_categories(HERE)
     categories_source = _load_categories_source(HERE)
@@ -1305,7 +1407,7 @@ def main() -> None:
         notebook_issues=notebook_issues,
         categories=notebook_categories,
         existing_run_times=existing_run_times,
-        mkfigs_version=mkfigs_version,
+        run_versions=run_versions,
         existing_run_versions=existing_run_versions,
     )
     print(plain_summary)
@@ -1364,7 +1466,7 @@ def main() -> None:
     _merged_run_times = {**existing_run_times, **{nb: _ts for nb in ok_nbs}}
     if _merged_run_times:
         all_notebook_urls["_run_times"] = _merged_run_times
-    _merged_run_versions = {**existing_run_versions, **{nb: mkfigs_version for nb in ok_nbs}}
+    _merged_run_versions = {**existing_run_versions, **run_versions}
     if _merged_run_versions:
         all_notebook_urls["_run_versions"] = _merged_run_versions
     # Nav includes all notebooks with valid URLs, except those that failed this run.
