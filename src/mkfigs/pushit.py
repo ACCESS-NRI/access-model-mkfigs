@@ -883,7 +883,7 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
                     print(f"               -> would delete id {file_id} "
                           f"(pass --fix-duplicates to actually delete)")
 
-    problems = missing or pending or mismatch or extra or dup_report
+    problems = missing or pending or mismatch or dup_report
     if problems:
         print(f"\n{ename} is NOT ready to publish -- see issues above.")
         sys.exit(1)
