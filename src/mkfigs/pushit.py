@@ -203,6 +203,60 @@ def get_authors_md() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Notebook execution status (read from the rendered notebook itself)
+# ---------------------------------------------------------------------------
+def notebook_execution_error(rendered: Path) -> str | None:
+    """Return why *rendered* did not run cleanly, or None if it did.
+
+    mkfigs-run keeps ``<nb>_rendered.ipynb`` -- and every PNG / mkmd .md the
+    notebook wrote before it stopped -- even when papermill fails, so those
+    files existing says nothing about whether the notebook finished. The
+    rendered notebook is the execution record, so it is read instead:
+
+    * an ``error`` output in a code cell, or a cell papermill flagged with
+      ``metadata.papermill.exception`` -- the rule papermill's own
+      ``raise_for_execution_errors`` uses for its exit status, including its
+      exemption for a deliberate ``sys.exit()`` / ``sys.exit(0)``;
+    * for papermill output only: no ``end_time`` (the job was killed
+      mid-notebook), or non-empty code cells that never ran (the kernel
+      died or a cell timed out, which leaves no error output behind).
+    """
+    try:
+        nb = json.loads(rendered.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return f"rendered notebook unreadable ({exc.__class__.__name__})"
+
+    code_cells = [c for c in nb.get("cells", []) if c.get("cell_type") == "code"]
+    for cell in code_cells:
+        where = f"In [{cell.get('execution_count') or ' '}]"
+        for out in cell.get("outputs", []):
+            if out.get("output_type") != "error":
+                continue
+            if out.get("ename") == "SystemExit" and out.get("evalue") in ("", "0"):
+                return None  # deliberate early exit; later cells are meant not to run
+            ename = out.get("ename") or "Error"
+            evalue = (out.get("evalue") or "").strip().split("\n", 1)[0][:160]
+            return f"{where} {ename}: {evalue}" if evalue else f"{where} {ename}"
+        if cell.get("metadata", {}).get("papermill", {}).get("exception") is True:
+            return f"{where} raised an exception"
+
+    papermill_md = nb.get("metadata", {}).get("papermill")
+    if papermill_md is None:
+        return None  # not papermill output: error outputs are the only record
+    if not papermill_md.get("end_time"):
+        return "did not finish (job killed or out of walltime?)"
+    never_ran = [
+        c for c in code_cells
+        if c.get("execution_count") is None
+        and "".join(c.get("source", "")).strip()
+        and "skip-execution" not in c.get("metadata", {}).get("tags", [])
+    ]
+    if never_ran:
+        return f"stopped early: {len(never_ran)} code cell(s) never ran (kernel died or cell timed out?)"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Run-summary builder (shared between stdout and index.md)
 # ---------------------------------------------------------------------------
 STATUS_HEADER = "Notebook run success?"
@@ -641,6 +695,7 @@ def check_figshare_upload_mode(ename: str) -> None:
     ok_nbs = [
         nb for nb in notebooks
         if (ofol / f"{nb}_rendered.ipynb").exists()
+        and notebook_execution_error(ofol / f"{nb}_rendered.ipynb") is None
         and (experiment_docs_dir / f"{nb}.md").exists()
     ]
 
@@ -817,8 +872,9 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
 
     # Same "should exist on Figshare" gate pushit.py's own main loop uses:
     # a rendered.ipynb existing on disk does NOT mean the notebook
-    # succeeded (nbconvert/papermill can leave one behind after an
-    # error) -- only count it if it also produced PNGs or markdown.
+    # succeeded (papermill leaves one behind after an error, along with
+    # any PNGs/markdown written before it) -- only count it if it ran
+    # cleanly and also produced PNGs or markdown.
     _, _esmdir, notebooks = parse_mkfigs_sh()
     pngs_by_nb = assign_pngs_to_notebooks(mdfol, notebooks)
     local_names: dict[str, str] = {}  # filename -> local md5
@@ -826,7 +882,8 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
         rendered = ofol / f"{nb}_rendered.ipynb"
         pngs = pngs_by_nb.get(nb, [])
         nb_md = mdfol / f"{nb}.md"
-        if not rendered.exists() or (not pngs and not nb_md.exists()):
+        if (not rendered.exists() or notebook_execution_error(rendered)
+                or (not pngs and not nb_md.exists())):
             continue
         local_names[rendered.name] = _md5(rendered)
         for png_name in pngs:
@@ -1273,9 +1330,16 @@ def main() -> None:
         rendered = ofol / f"{nb}_rendered.ipynb"
         pngs     = pngs_by_notebook.get(nb, [])
         nb_md    = mdfol / f"{nb}.md"
+        exec_error = None
         if not rendered.exists():
             not_run_nbs.append(nb)
             status = "NOT RUN"
+        elif exec_error := notebook_execution_error(rendered):
+            # Checked before anything output-based: a notebook that errors
+            # part-way still leaves the PNGs / markdown it wrote before the
+            # error, and those must not make it look OK or PREV COMMITTED.
+            failed_nbs.append(nb)
+            status = "FAILED  (execution error)"
         elif nb in existing_urls and not pngs:
             # Restored by mkfigs-restore (rendered notebook + md present but
             # no new PNGs): preserve existing Figshare URL, do not re-upload.
@@ -1289,6 +1353,8 @@ def main() -> None:
             n_png = len(pngs)
             status = f"OK      ({n_png} PNG{'s' if n_png != 1 else ''})"
         print(f"  {status:<34}  {nb}")
+        if exec_error:
+            print(f"  {'':<34}    -> {exec_error}")
 
     # Any previously committed notebooks absent from this run's notebook list.
     _seen = {*ok_nbs, *failed_nbs, *not_run_nbs, *prev_committed_nbs}
