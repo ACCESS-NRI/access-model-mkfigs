@@ -123,3 +123,87 @@ def test_main_writes_error_log_for_failed_notebooks(tmp_path, monkeypatch):
     assert "FAILED: MLD" in content
     assert "RuntimeError: kaboom" in content
     assert "FAILED: SST" not in content
+
+
+# ---------------------------------------------------------------------------
+# Execution-time mkfigs version recorded in the rendered notebook (#38)
+# ---------------------------------------------------------------------------
+
+def test_stamp_mkfigs_version_adds_key_and_keeps_other_metadata(tmp_path):
+    """The stamp adds metadata.mkfigs.version and leaves everything else alone."""
+    rendered = tmp_path / "SST_rendered.ipynb"
+    rendered.write_text(json.dumps({
+        "cells": [{"cell_type": "code", "source": ["1"], "outputs": [],
+                   "execution_count": 1, "metadata": {}}],
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3 (ipykernel)", "name": "python3"},
+            "papermill": {"start_time": "2026-11-01T00:00:00"},
+            "mkfigs": {"other": "kept"},
+        },
+        "nbformat": 4, "nbformat_minor": 5,
+    }))
+    rendered.chmod(0o640)
+
+    assert run_mod.stamp_mkfigs_version(rendered, "v0.2.0-3-gabc1234") is True
+
+    nb = json.loads(rendered.read_text())
+    assert nb["metadata"]["mkfigs"] == {"other": "kept", "version": "v0.2.0-3-gabc1234"}
+    assert nb["metadata"]["papermill"] == {"start_time": "2026-11-01T00:00:00"}
+    assert nb["cells"][0]["source"] == ["1"]
+    assert rendered.stat().st_mode & 0o777 == 0o640  # permissions kept
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["SST_rendered.ipynb"]  # no temp file left
+
+
+def test_stamp_mkfigs_version_overwrites_an_older_stamp(tmp_path):
+    """Re-running a notebook replaces the previous run's version."""
+    rendered = tmp_path / "SST_rendered.ipynb"
+    rendered.write_text(json.dumps({"cells": [], "metadata": {"mkfigs": {"version": "old"}}}))
+
+    run_mod.stamp_mkfigs_version(rendered, "new")
+
+    assert json.loads(rendered.read_text())["metadata"]["mkfigs"]["version"] == "new"
+
+
+def test_stamp_mkfigs_version_never_raises(tmp_path):
+    """A missing or corrupt rendered notebook is reported, not raised."""
+    assert run_mod.stamp_mkfigs_version(tmp_path / "missing.ipynb", "v1") is False
+
+    corrupt = tmp_path / "corrupt_rendered.ipynb"
+    corrupt.write_text("{not json")
+    assert run_mod.stamp_mkfigs_version(corrupt, "v1") is False
+    assert corrupt.read_text() == "{not json"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["corrupt_rendered.ipynb"]
+
+
+def test_main_stamps_every_rendered_notebook_with_run_version(tmp_path, monkeypatch):
+    """main() stamps the version it ran with into OK and FAILED notebooks alike."""
+    wfolder = tmp_path / "paper-repo"
+    notebooks_dir = wfolder / "notebooks"
+    notebooks_dir.mkdir(parents=True)
+    for nb in ("SST", "MLD", "AMOC"):
+        _write_notebook(notebooks_dir / f"{nb}.ipynb")
+
+    monkeypatch.setenv("MKFIGS_NOTEBOOKS", "SST:MLD:AMOC")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["mkfigs-run", "--ename", "exp1", "--esmdir", "/fake/esm.json", "--wfolder", str(wfolder)],
+    )
+    monkeypatch.setattr(run_mod, "get_mkfigs_version", lambda: "v0.2.0-3-gabc1234")
+
+    def fake_run_notebook(nb, esmdir, ofol, nbdir):
+        # SST succeeds, MLD fails after papermill wrote its output, and AMOC
+        # fails before any rendered notebook exists.
+        if nb == "AMOC":
+            return False
+        _write_notebook(ofol / f"{nb}_rendered.ipynb")
+        return nb == "SST"
+
+    monkeypatch.setattr(run_mod, "run_notebook", fake_run_notebook)
+
+    run_mod.main()
+
+    ofol = notebooks_dir / "mkfigs_output_exp1"
+    for nb in ("SST", "MLD"):
+        meta = json.loads((ofol / f"{nb}_rendered.ipynb").read_text())["metadata"]
+        assert meta["mkfigs"]["version"] == "v0.2.0-3-gabc1234"
+    assert not (ofol / "AMOC_rendered.ipynb").exists()  # nothing created for it

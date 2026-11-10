@@ -22,11 +22,48 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from . import get_mkfigs_version
+
+# Key under the rendered notebook's top-level metadata where mkfigs records
+# provenance for the run that executed it. mkfigs-pushit reads it back.
+MKFIGS_METADATA_KEY = "mkfigs"
+
+
+def stamp_mkfigs_version(rendered_path: Path, version: str) -> bool:
+    """Record the executing mkfigs version in a rendered notebook's metadata.
+
+    Sets ``metadata["mkfigs"]["version"]`` in *rendered_path*, keeping any
+    other keys under ``metadata.mkfigs``. mkfigs-pushit reads it back so the
+    run-history table reports the version that *executed* the notebook, not
+    whichever version is checked out when pushit runs later
+    (https://github.com/ACCESS-NRI/access-model-mkfigs/issues/38).
+
+    Failed notebooks are stamped too: that version still ran them.
+    The file is replaced atomically with its permissions kept. Returns False,
+    without raising, if the file is missing or unreadable, so a provenance
+    problem never fails the batch job.
+    """
+    tmp = rendered_path.with_name(f"{rendered_path.name}.stamp.{os.getpid()}")
+    try:
+        with open(rendered_path) as f:
+            nb = json.load(f)
+        meta = nb.setdefault("metadata", {}).setdefault(MKFIGS_METADATA_KEY, {})
+        meta["version"] = version
+        # Same layout as nbformat/papermill output, so the file diff is one key.
+        with open(tmp, "w") as f:
+            json.dump(nb, f, indent=1, ensure_ascii=False)
+            f.write("\n")
+        shutil.copymode(rendered_path, tmp)
+        tmp.replace(rendered_path)
+        return True
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        return False
 
 
 def _extract_notebook_error(rendered_path: Path) -> str | None:
@@ -181,6 +218,9 @@ def main() -> None:
     for nb in notebooks:
         log.info("START  %s", nb)
         ok = run_notebook(nb, esmdir, ofol, notebooks_dir)
+        rendered = ofol / f"{nb}_rendered.ipynb"
+        if rendered.exists() and not stamp_mkfigs_version(rendered, mkfigs_ver):
+            log.warning("Could not record access-model-mkfigs version in %s", rendered)
         if ok:
             succeeded.append(nb)
             log.info("OK     %s", nb)

@@ -119,6 +119,14 @@ export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs
    | `NOT RUN` | in the `array` but no output from this run |
    | `PREV COMMITTED` | not in this run; kept from the last published version |
 
+   The `access-model-mkfigs` column of the run summary shows the version that **ran** each
+   notebook, not the version `pushit` runs from. `mkfigs.run` saves it in each
+   `*_rendered.ipynb` (`metadata.mkfigs.version`). For output from an older `mkfigs.run` that
+   did not save it, `pushit` reads `mkfigs_run.log` instead. If neither source has it, the
+   summary shows `unknown`. So updating the submodule between steps 4 and 5 does not change
+   what the summary reports. `pushit` prints the version(s) it found and says when they differ
+   from its own.
+
 6. Log in to Figshare and publish the article.
 7. `python3 -m mkfigs.pushit --check-figshare-upload`, then run the `git` commands it prints. These
    commit the docs pages on a branch named `eval-<ENAME>` (not `main`), create a tag named
@@ -265,6 +273,9 @@ git commit -m "Bump access-model-mkfigs to <tag-or-commit>"
 ```
 
 Everyone else then runs `git pull && git submodule update --init --recursive`.
+
+It is safe to bump the submodule after `mkfigs.sh` has run and before `pushit`. The run
+summary still credits each notebook to the version that ran it, not the new pin.
 
 ## Previewing the website without Figshare
 
