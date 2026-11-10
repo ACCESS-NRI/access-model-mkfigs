@@ -3,7 +3,7 @@ name: CD
 on:
   push:
     tags:
-      - '**'
+      - 'v*'
 
 jobs:
   ci:
@@ -16,4 +16,6 @@ jobs:
     permissions:
       contents: write
     with:
+      pypi-package: true
       conda-package: false
+      version-prefix: v
