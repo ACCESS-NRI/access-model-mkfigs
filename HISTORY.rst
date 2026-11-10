@@ -2,10 +2,10 @@
 History
 =======
 
-0.1.0 (2026-11-04)
-------------------
+v0.1.0 (2026-11-10)
+-------------------
 
-Initial GitHub release.
+Initial release on PyPI and GitHub.
 
 * Support evaluation figure workflows for ACCESS-OM3 and ACCESS-CM3 paper repositories.
 * Run analysis notebooks and publish figures and rendered notebooks to Figshare.
