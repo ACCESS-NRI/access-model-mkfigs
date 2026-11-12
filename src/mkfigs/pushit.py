@@ -637,6 +637,11 @@ def _docs_linked_file_ids(experiment_docs_dir: Path) -> set[str]:
     return set(re.findall(r"https://ndownloader\.figshare\.com/files/(\d+)", text))
 
 
+def _notebook_of(filename: str) -> str:
+    """Notebook a Figshare file belongs to: strip "_rendered.ipynb" or "_NN.png"."""
+    return re.sub(r"(_rendered\.ipynb|_\d+\.png)$", "", filename)
+
+
 def _classify_duplicates(entries: list[dict], local_md5: str):
     """Given 2+ remote file entries sharing one name, decide what's safe
     to clean up automatically. Ported from the standalone verify_uploads.py
@@ -787,13 +792,18 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
         else:
             pending.append(fname)
 
-    extra = sorted(set(by_name) - set(local_names))
     # On a re-run after mkfigs.restore, files from earlier renders stay on the
     # article because the docs pages for PREV COMMITTED notebooks still link to
-    # them. Those are expected; only unlinked files are real extras.
-    linked_ids = _docs_linked_file_ids(DOCS_PAGES / "experiments" / ename)
-    kept = [n for n in extra if any(str(e.get("id")) in linked_ids for e in by_name[n])]
-    extra = [n for n in extra if n not in kept]
+    # them. Those are expected; only unlinked files are real extras. Judge each
+    # remote file by its id, not its name, so an unlinked copy that shares its
+    # name with a linked file (e.g. left by an interrupted upload) is still caught.
+    experiment_docs_dir = DOCS_PAGES / "experiments" / ename
+    linked_ids = _docs_linked_file_ids(experiment_docs_dir)
+    kept: list[tuple[str, int]] = []   # (name, file id)
+    extra: list[tuple[str, int]] = []
+    for name in sorted(set(by_name) - set(local_names)):
+        for e in by_name[name]:
+            (kept if str(e.get("id")) in linked_ids else extra).append((name, e.get("id")))
 
     dup_report = []
     for fname, local_md5 in sorted(local_names.items()):
@@ -806,11 +816,17 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
     for label, names in (("MISSING", missing), ("PENDING", pending), ("MISMATCH", mismatch)):
         for n in names:
             print(f"  {label:9s} {n}")
-    for n in extra:
-        print(f"  EXTRA     {n}  (on Figshare, no local file with this name)")
+    for n, file_id in extra:
+        print(f"  EXTRA     {n}  (id {file_id}: not in this run's output, "
+              f"not linked from the docs pages)")
+    if extra and not linked_ids:
+        print(f"  NOTE      no Figshare links found under {experiment_docs_dir}, so files "
+              f"from earlier renders can't be recognised and are reported as EXTRA")
     if kept:
-        print(f"  KEPT      {len(kept)} file(s) from earlier renders, still linked "
-              f"from the docs pages (expected on a re-run)")
+        kept_nbs = sorted({_notebook_of(n) for n, _ in kept})
+        print(f"  KEPT      {len(kept)} file(s) from earlier renders of {len(kept_nbs)} "
+              f"notebook(s), still linked from the docs pages (expected on a re-run): "
+              f"{', '.join(kept_nbs)}")
     for fname, action, ids, note in dup_report:
         tag = {"delete_stubs": "DUP-STUB", "delete_older_dupes": "DUP-OLD ",
                "stale_duplicates": "DUP-STALE", "conflicting": "DUP-CONFLICT"}[action]
@@ -827,7 +843,8 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
     if problems:
         print(f"\n{ename} is NOT ready to publish -- see issues above.")
         sys.exit(1)
-    print(f"\n{ename}: all {len(local_names)} file(s) present and correct, "
+    kept_note = f", {len(kept)} kept from earlier renders" if kept else ""
+    print(f"\n{ename}: all {len(local_names)} file(s) present and correct{kept_note}, "
           f"no duplicates. Safe to publish.")
 
 

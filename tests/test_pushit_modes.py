@@ -439,3 +439,69 @@ def test_check_figshare_integrity_rerun_still_flags_unlinked_files(
     out = capsys.readouterr().out
     assert "EXTRA     Orphan_01.png" in out
     assert "MLD_01.png" not in out
+
+
+def test_check_figshare_integrity_rerun_names_kept_notebooks(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """The KEPT line says which notebooks the earlier-render files belong to."""
+    _seed_rerun(patch_repo_paths, fake_figshare, figshare_token, "test_experiment_01")
+
+    _run_pushit(["--check-figshare-integrity"])
+
+    out = capsys.readouterr().out
+    assert "earlier renders of 1 notebook(s)" in out
+    assert out.rstrip().endswith("2 kept from earlier renders, no duplicates. Safe to publish.")
+    kept_line = next(line for line in out.splitlines() if line.lstrip().startswith("KEPT"))
+    assert kept_line.endswith(": MLD")
+
+
+def test_check_figshare_integrity_rerun_flags_unlinked_copy_of_kept_file(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """Files are judged by id: a second, unlinked copy of a kept file is EXTRA,
+    even though a linked file with the same name exists."""
+    article_id = _seed_rerun(patch_repo_paths, fake_figshare, figshare_token, "test_experiment_01")
+    orphan_id = fake_figshare.seed_file(article_id, "MLD_01.png", b"interrupted re-upload")
+
+    with pytest.raises(SystemExit) as exc:
+        _run_pushit(["--check-figshare-integrity"])
+    assert exc.value.code != 0
+    out = capsys.readouterr().out
+    assert f"EXTRA     MLD_01.png  (id {orphan_id}:" in out
+    assert "KEPT      2 file(s)" in out
+
+
+def test_check_figshare_integrity_notes_missing_docs_links(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """Without any docs links (e.g. the docs pages are not in this checkout),
+    earlier renders' files stay EXTRA and the output says why."""
+    ename = "test_experiment_01"
+    _seed_rerun(patch_repo_paths, fake_figshare, figshare_token, ename)
+    docs = patch_repo_paths / "documentation" / "docs" / "pages" / "experiments" / ename
+    for f in docs.iterdir():
+        f.unlink()
+
+    with pytest.raises(SystemExit):
+        _run_pushit(["--check-figshare-integrity"])
+    out = capsys.readouterr().out
+    assert "EXTRA     MLD_01.png" in out
+    assert "NOTE      no Figshare links found" in out
+
+
+def test_check_figshare_integrity_rerun_tolerates_bad_notebooks_urls_json(
+    patch_repo_paths, fake_figshare, figshare_token, capsys
+):
+    """A malformed notebooks_urls.json is skipped; image links in the .md
+    pages still count, so only the notebook file is reported."""
+    ename = "test_experiment_01"
+    _seed_rerun(patch_repo_paths, fake_figshare, figshare_token, ename)
+    docs = patch_repo_paths / "documentation" / "docs" / "pages" / "experiments" / ename
+    (docs / "notebooks_urls.json").write_text("{not json")
+
+    with pytest.raises(SystemExit):
+        _run_pushit(["--check-figshare-integrity"])
+    out = capsys.readouterr().out
+    assert "EXTRA     MLD_rendered.ipynb" in out
+    assert "KEPT      1 file(s)" in out
