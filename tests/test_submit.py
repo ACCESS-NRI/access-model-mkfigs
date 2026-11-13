@@ -34,6 +34,7 @@ def submit(tmp_path, monkeypatch):
     nbdir.mkdir(parents=True)
     (nbdir / "mkfigs.sh").write_text(MKFIGS_SH)
     monkeypatch.chdir(nbdir)
+    monkeypatch.setenv("PROJECT", "ab12")
     # pushit resolves its notebooks dir from the CWD at import time; point it here for this test
     import mkfigs.pushit
     import mkfigs.submit
@@ -46,7 +47,7 @@ def _qsub_calls(submit_mod, monkeypatch, argv):
 
     def fake_run(cmd, **kw):
         calls.append(cmd)
-        return MagicMock(stdout=f"{1000 + len(calls)}.gadi-pbs\n")
+        return MagicMock(returncode=0, stdout=f"{1000 + len(calls)}.gadi-pbs\n", stderr="")
 
     monkeypatch.setattr(submit_mod.subprocess, "run", fake_run)
     submit_mod.main(argv)
@@ -65,6 +66,24 @@ def test_one_job_per_notebook_then_summary(submit, monkeypatch):
     summary = calls[-1]
     assert "depend=afterany:1001.gadi-pbs:1002.gadi-pbs:1003.gadi-pbs" in summary
     assert "MKFIGS_NOTEBOOKS=SST:51_si_drift_osi455:MLD,MKFIGS_REPORT_ONLY=1" in summary
+
+
+def test_project_passed_explicitly_unless_mkfigs_sh_sets_one(submit, monkeypatch):
+    # Gadi's qsub ignores $PROJECT once -v is given, so it has to be passed as -P
+    submit_mod, nbdir = submit
+    calls = _qsub_calls(submit_mod, monkeypatch, ["SST"])
+    assert all(cmd[1:3] == ["-P", "ab12"] for cmd in calls)
+    (nbdir / "mkfigs.sh").write_text(MKFIGS_SH.replace("#PBS -q normal", "#PBS -q normal\n#PBS -P cd34"))
+    calls = _qsub_calls(submit_mod, monkeypatch, ["SST"])
+    assert all("-P" not in cmd for cmd in calls)
+
+
+def test_qsub_failure_stops_with_its_message(submit, monkeypatch, capsys):
+    submit_mod, _ = submit
+    monkeypatch.setattr(submit_mod.subprocess, "run",
+                        lambda cmd, **kw: MagicMock(returncode=32, stdout="", stderr="qsub: Error: no project"))
+    with pytest.raises(SystemExit, match="no project"):
+        submit_mod.main(["SST"])
 
 
 def test_subset_and_unknown_notebooks(submit, monkeypatch):

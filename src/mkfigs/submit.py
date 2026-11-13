@@ -25,6 +25,7 @@ Requires a mkfigs.sh that leaves MKFIGS_NOTEBOOKS alone when it is already set:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shlex
 import subprocess
@@ -60,8 +61,26 @@ def qsub(args: list[str], dry_run: bool, cwd: Path) -> str:
     print("  " + shlex.join(cmd))
     if dry_run:
         return f"<{args[args.index('-N') + 1]}>"
-    out = subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
+    out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"ERROR: qsub failed (exit {out.returncode}): {out.stderr.strip() or out.stdout.strip()}\n"
+                 "(jobs submitted before this one, if any, are listed above; qdel them if needed)")
+    print(f"    -> {out.stdout.strip()}")
     return out.stdout.strip()
+
+
+def project_args(sh: Path) -> list[str]:
+    """`-P $PROJECT` unless mkfigs.sh sets `#PBS -P` itself.
+
+    Gadi's qsub falls back to $PROJECT for the project to charge, but not when -v is given
+    (it then fails with "You have not requested a project"), and every job here uses -v.
+    """
+    if re.search(r"^#PBS\s+-P\s", sh.read_text(), re.MULTILINE):
+        return []
+    project = os.environ.get("PROJECT")
+    if not project:
+        sys.exit("ERROR: set $PROJECT (or add #PBS -P <project> to mkfigs.sh)")
+    return ["-P", project]
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -92,11 +111,12 @@ def main(argv: list[str] | None = None) -> None:
             (status_dir / f"{nb}.txt").unlink(missing_ok=True)
 
     print(f"Experiment {ename}: {len(notebooks)} notebook job(s) + 1 summary job")
+    proj = project_args(sh)
     ids = []
     for nb in notebooks:
-        ids.append(qsub(["-N", job_name(nb), "-m", "n", "-v", f"MKFIGS_NOTEBOOKS={nb},MKFIGS_SKIP_REPORT=1",
+        ids.append(qsub([*proj, "-N", job_name(nb), "-m", "n", "-v", f"MKFIGS_NOTEBOOKS={nb},MKFIGS_SKIP_REPORT=1",
                          "mkfigs.sh"], args.dry_run, here))
-    summary = qsub(["-N", "mk_summary", "-l", SUMMARY_RESOURCES,
+    summary = qsub([*proj, "-N", "mk_summary", "-l", SUMMARY_RESOURCES,
                     "-W", "depend=afterany:" + ":".join(ids),
                     "-v", "MKFIGS_NOTEBOOKS=" + ":".join(notebooks) + ",MKFIGS_REPORT_ONLY=1",
                     "mkfigs.sh"], args.dry_run, here)
