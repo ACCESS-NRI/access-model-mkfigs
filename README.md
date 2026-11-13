@@ -90,6 +90,18 @@ export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs
    qsub mkfigs.sh              # submit from this directory: mkfigs.sh finds the repo root from here
    ```
 
+   Or, to finish sooner, run each notebook as its own PBS job (same `#PBS` settings from `mkfigs.sh`,
+   about the same SU cost; the run takes as long as the slowest notebook instead of all of them added up):
+
+   ```bash
+   python3 -m mkfigs.submit --dry-run   # print the qsub commands
+   python3 -m mkfigs.submit             # every notebook in the array (or name some: ... submit SST MLD)
+   ```
+
+   This needs the login-node environment below and a `mkfigs.sh` that keeps a notebook list passed in
+   with `qsub -v`, i.e. `MKFIGS_NOTEBOOKS="${MKFIGS_NOTEBOOKS:-...}"`. A small summary job runs after the
+   others and writes the usual summary and `mkfigs_errors.log`; read `mk_summary.o*` instead of `mkfigs.sh.o*`.
+
    **The job exits 0 even if some notebooks failed**, so read the results. The log files are in
    `mkfigs_output_<ENAME>/mkmd/` (not next to the notebooks):
 

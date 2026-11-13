@@ -172,21 +172,48 @@ def main() -> None:
         sys.exit(1)
     notebooks = [n for n in notebooks_env.split(":") if n]
 
-    succeeded: list[str] = []
-    failed:    list[str] = []
+    # mkfigs.submit runs each notebook in its own job (MKFIGS_SKIP_REPORT=1) and then a
+    # summary job (MKFIGS_REPORT_ONLY=1) that reports on all of them, using the status
+    # files each job leaves in mkmd/status/.
+    if os.environ.get("MKFIGS_REPORT_ONLY") != "1":
+        log.info("")
+        log.info("Running %d notebooks ...", len(notebooks))
+        log.info("")
+        for nb in notebooks:
+            log.info("START  %s", nb)
+            ok = run_notebook(nb, esmdir, ofol, notebooks_dir)
+            _write_status(mdfol, nb, ok)
+            if ok:
+                log.info("OK     %s", nb)
+            else:
+                log.error("FAILED %s", nb)
 
-    log.info("")
-    log.info("Running %d notebooks ...", len(notebooks))
-    log.info("")
-    for nb in notebooks:
-        log.info("START  %s", nb)
-        ok = run_notebook(nb, esmdir, ofol, notebooks_dir)
-        if ok:
-            succeeded.append(nb)
-            log.info("OK     %s", nb)
-        else:
-            failed.append(nb)
-            log.error("FAILED %s", nb)
+    if os.environ.get("MKFIGS_SKIP_REPORT") == "1":
+        return
+    _report(notebooks, ofol, mdfol, log)
+    _print_next_steps(Path(args.wfolder), notebooks_dir)
+
+
+def _write_status(mdfol: Path, nb: str, ok: bool) -> None:
+    """Record one notebook's result as mkmd/status/<nb>.txt ("OK" or "FAILED")."""
+    status_dir = mdfol / "status"
+    status_dir.mkdir(parents=True, exist_ok=True)
+    (status_dir / f"{nb}.txt").write_text("OK\n" if ok else "FAILED\n")
+
+
+def _read_status(mdfol: Path, nb: str) -> str:
+    """Return "OK", "FAILED", or "NOT RUN" (no status file, e.g. its job was killed)."""
+    try:
+        return (mdfol / "status" / f"{nb}.txt").read_text().strip() or "NOT RUN"
+    except FileNotFoundError:
+        return "NOT RUN"
+
+
+def _report(notebooks: list[str], ofol: Path, mdfol: Path, log: logging.Logger) -> None:
+    """Log which notebooks succeeded or failed and write mkfigs_errors.log for the failures."""
+    status = {nb: _read_status(mdfol, nb) for nb in notebooks}
+    succeeded = [nb for nb in notebooks if status[nb] == "OK"]
+    failed    = [nb for nb in notebooks if status[nb] != "OK"]
 
     log.info("")
     log.info("=" * 56)
@@ -207,12 +234,13 @@ def main() -> None:
                 ef.write(f"{'=' * 56}\n")
                 ef.write(f"FAILED: {nb}\n")
                 ef.write(f"{'=' * 56}\n")
+                if status[nb] == "NOT RUN":
+                    ef.write("(no result recorded: the notebook's job did not finish, e.g. walltime or memory)\n\n")
+                    continue
                 error = _extract_notebook_error(rendered)
                 ef.write(error + "\n" if error else "(no error output found in rendered notebook)\n")
                 ef.write("\n")
         log.error("Error details: %s", errors_log)
-
-    _print_next_steps(Path(args.wfolder), notebooks_dir)
 
 def _print_next_steps(wfolder: Path, notebooks_dir: Path) -> None:
     """Print the login-node commands to run after the batch job."""
