@@ -123,3 +123,53 @@ def test_main_writes_error_log_for_failed_notebooks(tmp_path, monkeypatch):
     assert "FAILED: MLD" in content
     assert "RuntimeError: kaboom" in content
     assert "FAILED: SST" not in content
+
+
+# ---------------------------------------------------------------------------
+# Extra papermill parameters (MKFIGS_PARAMETERS, e.g. NYEARS=5)
+# ---------------------------------------------------------------------------
+import pytest  # noqa: E402
+
+
+def _papermill_args(tmp_path, monkeypatch, parameters):
+    notebooks_dir = tmp_path / "notebooks"
+    notebooks_dir.mkdir()
+    ofol = notebooks_dir / "mkfigs_output_exp1"
+    ofol.mkdir()
+    _write_notebook(notebooks_dir / "SST.ipynb")
+    if parameters is not None:
+        monkeypatch.setenv("MKFIGS_PARAMETERS", parameters)
+    with patch.object(run_mod.subprocess, "run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        run_mod.run_notebook("SST", "/fake/esm.json", ofol, notebooks_dir)
+    return mock_run.call_args_list[0].args[0]
+
+
+def test_extra_parameters_are_passed_to_papermill(tmp_path, monkeypatch):
+    args = _papermill_args(tmp_path, monkeypatch, "NYEARS=5 start_year=1990-01-01")
+    assert args[-6:] == ["-p", "NYEARS", "5", "-p", "start_year", "1990-01-01"]
+    assert args[args.index("esm_file") + 1] == "/fake/esm.json"   # mkfigs' own still there
+
+
+def test_no_extra_parameters_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("MKFIGS_PARAMETERS", raising=False)
+    args = _papermill_args(tmp_path, monkeypatch, None)
+    assert args[-2:] == ["nbname", "SST.ipynb"]
+
+
+@pytest.mark.parametrize("text", [
+    "NYEARS",                 # no value
+    "NYEARS=",                # empty value
+    "1YEARS=5",               # bad name
+    "NYEARS=5;id",            # shell metacharacter
+    "esm_file=/g/data/x.json",  # set by mkfigs
+    "NYEARS=5 NYEARS=6",      # twice
+])
+def test_bad_parameters_are_rejected(text):
+    with pytest.raises(ValueError):
+        run_mod.parse_parameters(text)
+
+
+def test_parse_parameters():
+    assert run_mod.parse_parameters("") == []
+    assert run_mod.parse_parameters("  NYEARS=5\tdpi=150 ") == [("NYEARS", "5"), ("dpi", "150")]

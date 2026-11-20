@@ -16,6 +16,7 @@ internet access) after mkfigs.sh completes:
     mkfigs-pushit --ename MC_25km_...        # override experiment name
     mkfigs-pushit --check-figshare-integrity # verify uploads complete/duplicate-free
     mkfigs-pushit --check-figshare-upload    # verify URLs public, print git commands
+    mkfigs-pushit --publish                  # integrity check, publish, then the above
 
 Suggested workflow:
   1. mkfigs-pushit                          — upload to Figshare, copy docs files
@@ -48,6 +49,7 @@ import yaml
 from . import get_mkfigs_version
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
 from .configdoc import get_docs_url, get_model_name, get_repo_slug, get_repo_url
+from .configdoc import FIGSHARE_BASE_URL, _figshare_request
 from ._paths import find_notebooks_dir, find_repo_root
 
 
@@ -587,14 +589,10 @@ def rtd_version_url(tag: str) -> str:
     return f"{get_docs_url()}{re.sub(r'[^a-z0-9._-]', '', tag.lower())}/"
 
 
-def check_figshare_upload_mode(ename: str) -> None:
-    """--check-figshare-upload: verify all Figshare URLs then print git commands.
+def _collect_figshare_urls(ename: str) -> dict[str, str]:
+    """Every Figshare URL the docs pages for *ename* link to: label -> URL.
 
-    Run this after publishing the Figshare article.  Reads notebook URLs from
-    notebooks_urls.json and image URLs embedded in the per-notebook .md files,
-    checks every URL is publicly accessible, and only then prints the full git
-    commit/tag/push commands needed to finish the workflow. The commit and tag
-    go on the experiment's ``eval-<ename>`` branch, never on main.
+    Notebook URLs from notebooks_urls.json, image URLs from the per-notebook .md files.
     """
     experiment_docs_dir = DOCS_PAGES / "experiments" / ename
     all_urls: dict[str, str] = {}
@@ -619,6 +617,24 @@ def check_figshare_upload_mode(ename: str) -> None:
         ):
             file_id = url.rsplit("/", 1)[-1]
             _add(f"image     {md_file.stem}/{file_id}", url)
+    return all_urls
+
+
+def check_figshare_upload_mode(ename: str, git_plan: Path | None = None) -> None:
+    """--check-figshare-upload: verify all Figshare URLs then print git commands.
+
+    Run this after publishing the Figshare article.  Reads notebook URLs from
+    notebooks_urls.json and image URLs embedded in the per-notebook .md files,
+    checks every URL is publicly accessible, and only then prints the full git
+    commit/tag/push commands needed to finish the workflow. The commit and tag
+    go on the experiment's ``eval-<ename>`` branch, never on main.
+
+    With *git_plan*, the same commit/tag details are also written there as JSON,
+    for scripts (the mkfigs GitHub Actions workflow) to carry out.
+    """
+    experiment_docs_dir = DOCS_PAGES / "experiments" / ename
+    urls_json = experiment_docs_dir / "notebooks_urls.json"
+    all_urls = _collect_figshare_urls(ename)
 
     if not all_urls:
         print("No Figshare URLs found. Run mkfigs-pushit first.")
@@ -687,6 +703,22 @@ def check_figshare_upload_mode(ename: str) -> None:
         ".readthedocs.yaml",
     ]
 
+    commit_msg = f"docs: render evaluation figures for {ename}"
+    mkfigs_sh_rel = str((HERE / "mkfigs.sh").relative_to(REPO))
+    if git_plan is not None:
+        plan = {
+            "ename": ename,
+            "branch": branch,
+            "branch_exists": _branch_exists(branch),
+            "tag": tag,
+            "tag_message": tag_msg,
+            "commit_message": commit_msg,
+            "files": added_files,
+            "recommended_files": [mkfigs_sh_rel],
+        }
+        Path(git_plan).write_text(json.dumps(plan, indent=2) + "\n")
+        print(f"Git plan written to {git_plan}\n")
+
     # The commit goes on an eval-<ename> branch, not main: it
     # contains the papermill-modified notebooks, which break interactive use and
     # cause merge conflicts if they land on main (access-model-mkfigs#8).
@@ -695,9 +727,9 @@ def check_figshare_upload_mode(ename: str) -> None:
     print(f"  {branch_cmd}")
     print(f"  git add {' '.join(added_files)}")
     print( "  #")
-    print(f"  #  Recommended that you -- git add {(HERE / 'mkfigs.sh').relative_to(REPO)} too")
+    print(f"  #  Recommended that you -- git add {mkfigs_sh_rel} too")
     print( "  #")
-    print(f'  git commit -m "docs: render evaluation figures for {ename}"')
+    print(f'  git commit -m "{commit_msg}"')
     print(f"  git tag -a {tag} -m '{tag_msg}'")
     print(f"  git push -u origin {branch}")
     print(f"  git push origin {tag}")
@@ -889,6 +921,103 @@ def check_figshare_integrity_mode(ename: str, fix_duplicates: bool = False) -> N
         sys.exit(1)
     print(f"\n{ename}: all {len(local_names)} file(s) present and correct, "
           f"no duplicates. Safe to publish.")
+
+
+# ---------------------------------------------------------------------------
+# Publish  (--publish mode)
+# ---------------------------------------------------------------------------
+def _find_article_id(uploader: FigshareUploader) -> int:
+    """The one private article titled for this experiment; exit if there are none or several.
+
+    Same exact-title lookup as --check-figshare-integrity (never creates an article).
+    """
+    title = uploader.article_title
+    matches = [a for a in uploader._list_all_articles_paginated() if a.get("title") == title]
+    if not matches:
+        sys.exit(f"ERROR: no Figshare article titled '{title}'. Run mkfigs-pushit first.")
+    if len(matches) > 1:
+        ids = ", ".join(str(a["id"]) for a in matches)
+        sys.exit(f"ERROR: {len(matches)} Figshare articles are titled '{title}' (ids {ids}); "
+                 "clean these up on Figshare before publishing.")
+    article_id = matches[0]["id"]
+    manifest_id = uploader._manifest.get(f"article_id_{uploader.experiment}")
+    if manifest_id is not None and int(manifest_id) != int(article_id):
+        sys.exit(f"ERROR: the local manifest says article {manifest_id}, but Figshare's only "
+                 f"article titled '{title}' is {article_id}. Check before publishing.")
+    return article_id
+
+
+def _public_files(token: str, article_id: int, page_size: int = 100) -> list[dict]:
+    """Files of the latest public version of *article_id* (empty if it has none)."""
+    files: list[dict] = []
+    page = 1
+    while True:
+        url = FIGSHARE_BASE_URL.format(endpoint=f"articles/{article_id}/files?page={page}&page_size={page_size}")
+        try:
+            batch = _figshare_request("GET", url, token)
+        except Exception:   # never published, or not visible yet
+            return files
+        if not batch:
+            return files
+        files.extend(batch)
+        if len(batch) < page_size:
+            return files
+        page += 1
+
+
+def _unpublished_changes(uploader: FigshareUploader, token: str, article_id: int) -> bool:
+    """Whether the article's current files differ from its latest public version."""
+    def key(files):
+        return {(f.get("name"), f.get("computed_md5") or f.get("supplied_md5")) for f in files}
+    return key(uploader._list_remote_files(article_id)) != key(_public_files(token, article_id))
+
+
+def publish_mode(ename: str, git_plan: Path | None = None, wait_minutes: float = 10.0) -> None:
+    """--publish: check the private upload, publish the Figshare article, then run
+    --check-figshare-upload.
+
+    Publishing cannot be undone (it mints a DOI), so nothing is published unless
+    --check-figshare-integrity passes first. A public article is published again (as a
+    new Figshare version) only if its files have changed since its latest public version,
+    e.g. after adding or re-running notebooks. Figshare can take a little while to serve
+    newly public files, so the public links are retried for up to *wait_minutes*.
+    """
+    import time
+
+    token = resolve_figshare_token()
+    if not token:
+        sys.exit("No Figshare token found -- set FIGSHARE_TOKEN or store in ~/.figshare_token")
+
+    print(f"Checking the private upload for {ename} before publishing...")
+    check_figshare_integrity_mode(ename)   # exits non-zero if anything is wrong
+
+    mdfol = HERE / f"mkfigs_output_{ename}" / "mkmd"
+    uploader = FigshareUploader(token, ename, str(mdfol))
+    article_id = _find_article_id(uploader)
+    article_url = FIGSHARE_BASE_URL.format(endpoint=f"account/articles/{article_id}")
+    status = _figshare_request("GET", article_url, token).get("status")
+
+    if status == "public" and not _unpublished_changes(uploader, token, article_id):
+        print(f"\n[figshare] Article {article_id} is already public and unchanged; not publishing again.")
+    else:
+        what = "a new version of" if status == "public" else "article"
+        print(f"\n[figshare] Publishing {what} {article_id} (status: {status})...")
+        _figshare_request("POST", f"{article_url}/publish", token)
+        print(f"[figshare] Published: https://figshare.com/articles/figure/{article_id}")
+
+    all_urls = _collect_figshare_urls(ename)
+    deadline = time.monotonic() + wait_minutes * 60
+    while all_urls and not _check_figshare_urls(all_urls):
+        if time.monotonic() >= deadline:
+            sys.exit(
+                f"\n*** Some links are still not public after {wait_minutes:g} min. If your "
+                "Figshare account sends items for review before they go public, wait for "
+                f"that, then run: mkfigs-pushit --check-figshare-upload --ename {ename} ***"
+            )
+        print("Waiting 30 s for Figshare to make the files public...\n")
+        time.sleep(30)
+
+    check_figshare_upload_mode(ename, git_plan=git_plan)
 
 
 # ---------------------------------------------------------------------------
@@ -1190,7 +1319,17 @@ def main() -> None:
                         "duplicates (broken stubs, and older copies of an exact duplicate "
                         "matching the local file). Without this, reported but not deleted. "
                         "Ambiguous duplicates are never auto-deleted regardless of this flag.")
+    p.add_argument("--publish", action="store_true",
+                   help="Run --check-figshare-integrity, PUBLISH the Figshare article (cannot be "
+                        "undone), wait for the links to go public, then run --check-figshare-upload")
+    p.add_argument("--publish-wait-minutes", type=float, default=10.0,
+                   help="With --publish: how long to wait for the files to go public (default 10)")
+    p.add_argument("--git-plan", type=Path, default=None, metavar="FILE",
+                   help="With --check-figshare-upload or --publish: also write the git "
+                        "branch/commit/tag details to FILE as JSON (used by the CI workflow)")
     args = p.parse_args()
+    if args.git_plan and not (args.check_figshare_upload or args.publish):
+        p.error("--git-plan needs --check-figshare-upload or --publish")
     load_model_identity_from_mkfigs_sh()
 
     mkfigs_version = get_mkfigs_version()
@@ -1200,8 +1339,12 @@ def main() -> None:
     if args.ename:
         ename = args.ename
 
+    if args.publish:
+        publish_mode(ename, git_plan=args.git_plan, wait_minutes=args.publish_wait_minutes)
+        return
+
     if args.check_figshare_upload:
-        check_figshare_upload_mode(ename)
+        check_figshare_upload_mode(ename, git_plan=args.git_plan)
         return
 
     if args.check_figshare_integrity:
@@ -1463,7 +1606,7 @@ def main() -> None:
             f"  1. Check private upload integrity:\n"
             f"     mkfigs-pushit --check-figshare-integrity{_ename_flag}"
         )
-        print(" 2. Publish the article on Figshare.")
+        print("  2. Publish the article on Figshare (or: mkfigs-pushit --publish, which does 1-3).")
         print(
             f"  3. Check public links:\n"
             f"     mkfigs-pushit --check-figshare-upload{_ename_flag}"
