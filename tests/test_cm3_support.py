@@ -33,7 +33,7 @@ def _drive_run_main(monkeypatch, wfolder: Path, extra_args: list[str]) -> list[P
     )
     seen: list[Path] = []
 
-    def fake_run_notebook(nb, esmdir, ofol, nbdir):
+    def fake_run_notebook(nb, esmdir, ofol, nbdir, repo_root=None):
         seen.append(nbdir)
         return True
 
@@ -188,7 +188,7 @@ def test_run_exports_ename_to_the_notebooks(tmp_path, monkeypatch):
                                      "--wfolder", str(wfolder)])
     import os
     monkeypatch.setattr(run_mod, "run_notebook",
-                        lambda nb, esm, ofol, nbdir: seen.append(os.environ.get("MKFIGS_ENAME")) or True)
+                        lambda nb, esm, ofol, nbdir, repo_root=None: seen.append(os.environ.get("MKFIGS_ENAME")) or True)
     try:
         run_mod.main()
     except SystemExit:
