@@ -119,7 +119,9 @@ export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs
    | `NOT RUN` | in the `array` but no output from this run |
    | `PREV COMMITTED` | not in this run; kept from the last published version |
 
-6. Log in to Figshare and publish the article.
+6. Log in to Figshare and publish the article. Or run `python3 -m mkfigs.pushit --publish`, which
+   runs `--check-figshare-integrity`, publishes the article only if that passes, waits for the
+   links to go public and then does step 7's check. Publishing cannot be undone.
 7. `python3 -m mkfigs.pushit --check-figshare-upload`, then run the `git` commands it prints. These
    commit the docs pages on a branch named `eval-<ENAME>` (not `main`), create a tag named
    `<ENAME>-YYYY.MM.NNN` on that commit, push both, and switch back to `main`.
@@ -198,6 +200,10 @@ missing from this render, which usually means `mkfigs.restore` was skipped.
 | `mkfigs.pushit --skip-figshare` | Update the docs site only, no upload. |
 | `mkfigs.pushit --check-figshare-integrity [--fix-duplicates]` | Before publishing: check every upload is complete and not duplicated. `--fix-duplicates` removes duplicates that are safe to remove. |
 | `mkfigs.pushit --check-figshare-upload` | After publishing: check the public links work and print the `git` commands. |
+| `mkfigs.pushit --publish [--publish-wait-minutes N]` | Integrity check, then **publish** the Figshare article (cannot be undone; an already-public article is left alone), wait up to N minutes (default 10) for the links to go public, then `--check-figshare-upload`. |
+| `--git-plan FILE` (with `--check-figshare-upload` or `--publish`) | Also write the branch, commit message, tag and files to `FILE` as JSON, for scripts. |
+| `mkfigs.set_experiment --ename E --esmdir D [--notebooks NB ...] [--parameters NAME=VALUE ...]` | Point `mkfigs.sh` at one experiment: comments out the active `ENAME=`/`ESMDIR=` lines and adds the new pair, optionally replaces the notebook `array` and sets extra papermill parameters (`MKFIGS_PARAMETERS`), and adds the datastore's project to `#PBS -l storage=`. Used by the CI workflow. |
+| `export MKFIGS_PARAMETERS="NYEARS=5 ..."` (in `mkfigs.sh`) | Extra papermill parameters for every notebook in the run, as space-separated `NAME=VALUE` pairs. Numbers and `True`/`False` arrive as numbers and booleans. A notebook without that parameter just gets a papermill warning; `esm_file`, `papermill`, `cwd` and `nbname` are set by mkfigs and cannot be overridden. |
 | `mkfigs.restore [--force]` | Download previously published notebooks so you can add to an experiment. `--force` downloads again even if present. |
 | `--ename E` (`pushit`, `restore`) | Use a different experiment name from the one in `mkfigs.sh`. |
 
@@ -278,6 +284,13 @@ runs so re-runs are fast. Without `--serve` it builds the site (`<repo>-preview/
 http://127.0.0.1:8000/ and re-renders about a second after you edit the repo's `documentation/` or the run output (reload the
 page). Earlier experiments' notebook pages are downloaded from Figshare in the real build, so their links show up as warnings in
 `<repo>-preview/mkdocs.log`.
+
+`mkfigs-gallery SITE_DIR ENAME OUT.html [--max-width PX] [--quality Q] [--note TEXT]` squashes a built site (e.g.
+`<repo>-preview/site`) into **one self-contained HTML file**: the real header and theme, the landing page (with its run
+summary tables), then every page of experiment `ENAME` with its figures and captions, and a contents list on the left.
+Figures are shrunk (default 1400 px wide) and stored in the file as WebP; scripts, web fonts and rendered notebooks are left
+out, and links to other pages are disabled (the run summary's Figures links jump to the right section instead). The CI
+workflow attaches this file to each run so it opens straight in the browser.
 
 `mkfigs-preview-branch --fork <YOUR FORK URL> [--branch preview/NAME] [--ename E] [REPO]` prepares a throwaway `preview/...` branch so
 that ReadTheDocs can render the site online (point a ReadTheDocs project at your fork and activate the branch). It commits only

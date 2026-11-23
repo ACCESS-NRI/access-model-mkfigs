@@ -32,6 +32,7 @@ dependencies = [
   "pyyaml",
   "requests",
   "matplotlib",
+  "pillow",
   "papermill",
   "nbconvert",
   "nci_ipynb",
@@ -53,6 +54,8 @@ mkfigs-run     = "mkfigs.run:main"
 mkfigs-pushit  = "mkfigs.pushit:main"
 mkfigs-restore = "mkfigs.restore:main"
 mkfigs-preview = "mkfigs.preview:main"
+mkfigs-set-experiment = "mkfigs.set_experiment:main"
+mkfigs-gallery = "mkfigs.gallery:main"
 mkfigs-preview-branch = "mkfigs.preview_branch:main"
 
 [project.urls]

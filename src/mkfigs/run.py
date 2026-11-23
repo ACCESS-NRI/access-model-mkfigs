@@ -114,8 +114,40 @@ def setup_logging(log_file: Path) -> logging.Logger:
     return logging.getLogger(__name__)
 
 
+# Set by mkfigs itself for every notebook: not overridable through MKFIGS_PARAMETERS.
+RESERVED_PARAMETERS = ("esm_file", "papermill", "cwd", "nbname")
+_PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PARAM_VALUE_RE = re.compile(r"^[A-Za-z0-9._:/+-]+$")
+
+
+def parse_parameters(text: str) -> list[tuple[str, str]]:
+    """Extra papermill parameters from MKFIGS_PARAMETERS: space-separated NAME=VALUE pairs.
+
+    e.g. "NYEARS=5 start_year=1990". Every notebook in the run gets them; one that has no such
+    parameter just gets a papermill warning. Values are passed with papermill's -p, which turns
+    numbers and True/False into ints, floats and booleans.
+    """
+    params: list[tuple[str, str]] = []
+    for item in text.split():
+        name, sep, value = item.partition("=")
+        if not sep or not _PARAM_NAME_RE.match(name) or not _PARAM_VALUE_RE.match(value):
+            raise ValueError(f"bad parameter {item!r}: expected NAME=VALUE "
+                             "(value: letters, digits and . _ : / + -)")
+        if name in RESERVED_PARAMETERS:
+            raise ValueError(f"parameter {name!r} is set by mkfigs and cannot be changed")
+        if any(name == n for n, _ in params):
+            raise ValueError(f"parameter {name!r} is given twice")
+        params.append((name, value))
+    return params
+
+
 def run_notebook(nb: str, esmdir: str, ofol: Path, notebooks_dir: Path) -> bool:
-    """Strip outputs, run via papermill, convert to markdown. Returns True on success."""
+    """Strip outputs, run via papermill, convert to markdown. Returns True on success.
+
+    Extra papermill parameters come from MKFIGS_PARAMETERS (see parse_parameters).
+    """
+    extra = [a for name, value in parse_parameters(os.environ.get("MKFIGS_PARAMETERS", ""))
+             for a in ("-p", name, value)]
     nb_path = notebooks_dir / f"{nb}.ipynb"
     fixed_path = _fix_kernel(nb_path)
 
@@ -128,6 +160,7 @@ def run_notebook(nb: str, esmdir: str, ofol: Path, notebooks_dir: Path) -> bool:
                 "-p", "papermill", "True",
                 "-p", "cwd", str(ofol) + "/",
                 "-p", "nbname", f"{nb}.ipynb",
+                *extra,
             ],
             cwd=str(notebooks_dir),
         )
@@ -165,6 +198,14 @@ def main() -> None:
     log.info("Output dir            : %s", ofol)
     log.info("Log file              : %s", mdfol / "mkfigs_run.log")
     log.info("access-model-mkfigs   : %s", mkfigs_ver)
+
+    try:
+        parameters = parse_parameters(os.environ.get("MKFIGS_PARAMETERS", ""))
+    except ValueError as exc:
+        log.error("MKFIGS_PARAMETERS: %s", exc)
+        sys.exit(1)
+    if parameters:
+        log.info("Parameters            : %s", " ".join(f"{n}={v}" for n, v in parameters))
 
     notebooks_env = os.environ.get("MKFIGS_NOTEBOOKS", "")
     if not notebooks_env:
