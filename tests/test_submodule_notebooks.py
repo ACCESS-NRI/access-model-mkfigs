@@ -278,7 +278,7 @@ def test_pushit_keeps_submodule_untouched_and_writes_as_run_copy(cm3_repo, fake_
     assert "TOA_CRE" not in urls["_sources"]
 
     index = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
-    assert ("| Notebook | Notebook run success? | Source (access-om3-paper-1: upstream&nbsp;·&nbsp;as&nbsp;run)"
+    assert ("| Notebook | Notebook run success? | Source (access-om3-paper-1 notebooks: upstream&nbsp;·&nbsp;as&nbsp;run)"
             " | GitHub Issue(s) | Links |") in index
     intro = index.split("<!-- experiments -->")[0]
     assert "[access-cm3-paper-1](https://github.com/ACCESS-Community-Hub/access-cm3-paper-1/) and the" in intro
@@ -299,6 +299,22 @@ def test_pushit_keeps_submodule_untouched_and_writes_as_run_copy(cm3_repo, fake_
     assert "repository of metrics" in sst_page and "(via Git history of `access-om3-paper-1`): Om Three." in sst_page
     assert f"[as run]({blob}/access-om3-paper-1/SST.ipynb)" in sst_page
     assert "Co-authors for this notebook (via Git history): unknown." in (exp / "TOA_CRE.md").read_text()
+
+
+def test_pushit_not_run_submodule_notebook_still_shows_its_repo(cm3_repo, fake_figshare, monkeypatch):
+    repo = cm3_repo
+    _seed(repo, ["TOA_CRE"], {})  # SST listed in om3_array but not run
+    monkeypatch.setattr(pushit, "describe_source", lambda p: {
+        "repo": "access-om3-paper-1", "url": OM3_URL, "commit": "d" * 40, "path": "notebooks/SST.ipynb",
+        "submodule": "external/access-om3-paper-1", "authors": []})
+    _pushit(["--skip-figshare"])
+    index = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
+    sst_row = next(ln for ln in index.splitlines() if ln.startswith("| `SST`"))
+    assert f"[`access-om3-paper-1`@`ddddddd`]({OM3_URL}/blob/{'d' * 40}/notebooks/SST.ipynb)" in sst_row
+    assert "as&nbsp;run](" not in sst_row
+    assert "git submodule of `access-cm3-paper-1`" in index
+    exp = repo / "documentation" / "docs" / "pages" / "experiments" / ENAME
+    assert "_sources" not in json.loads((exp / "notebooks_urls.json").read_text())
 
 
 def test_pushit_check_upload_git_adds_the_as_run_copy(cm3_repo, fake_figshare, monkeypatch, capsys):

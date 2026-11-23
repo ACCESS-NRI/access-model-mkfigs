@@ -46,7 +46,10 @@ from pathlib import Path
 import yaml
 
 from . import get_mkfigs_version
-from ._sources import check_unique_stems, notebook_stem, read_sources, rewrite_page_header, source_link_md
+from ._sources import (
+    check_unique_stems, describe_source, is_external, notebook_path, notebook_stem, read_sources,
+    rewrite_page_header, source_link_md,
+)
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
 from .configdoc import get_docs_url, get_model_name, get_repo_slug, get_repo_url
 from ._paths import find_notebooks_dir, find_repo_root
@@ -671,7 +674,7 @@ def sources_note(sources: dict[str, dict[str, str]]) -> str:
 def source_header(sources: dict[str, dict[str, str]]) -> str:
     """Landing-page Source column heading, e.g. 'Source (access-om3-paper-1: upstream · as run)'."""
     repos = sorted({info.get("repo") or "external" for info in sources.values()})
-    return f"Source ({', '.join(repos)}: upstream&nbsp;·&nbsp;as&nbsp;run)"
+    return f"Source ({', '.join(repos)} notebooks: upstream&nbsp;·&nbsp;as&nbsp;run)"
 
 
 def as_run_url(ename: str, nb: str, sources: dict[str, dict[str, str]]) -> str:
@@ -1459,8 +1462,14 @@ def main() -> None:
     # where their as-run copy goes. A notebook now listed as this repo's own is not.
     sources = {nb: s for nb, s in load_sources(mdfol, urls_json_path).items() if nb not in local_entries}
     _all_listed = ok_nbs + prev_committed_nbs + failed_nbs + not_run_nbs
+    # Submodule notebooks with no record yet (not run): describe them from the
+    # submodule as it is now, for the Source column only (not saved in _sources).
+    shown_sources = dict(sources)
+    for e in entries:
+        if is_external(e) and notebook_stem(e) not in shown_sources:
+            shown_sources[notebook_stem(e)] = describe_source(notebook_path(e, HERE, REPO))
     source_cells = build_source_cells(
-        ename, _all_listed, sources, linked={*ok_nbs, *prev_committed_nbs} - set(failed_nbs),
+        ename, _all_listed, shown_sources, linked={*ok_nbs, *prev_committed_nbs} - set(failed_nbs),
     )
     plain_summary, md_summary = build_run_summary(
         ename, esmdir, ok_nbs, failed_nbs, not_run_nbs, prev_committed_nbs, run_time,
@@ -1471,7 +1480,7 @@ def main() -> None:
         existing_run_versions=existing_run_versions,
         source_cells=source_cells,
         sources_note=sources_note(sources) if source_cells else "",
-        source_header=source_header(sources) if source_cells else "Source",
+        source_header=source_header(shown_sources) if source_cells else "Source",
     )
     print(plain_summary)
 
@@ -1607,7 +1616,7 @@ def main() -> None:
         dry_run=args.dry_run,
         categorised=bool(notebook_categories),
         categories_source=categories_source,
-        sources=sources,
+        sources=shown_sources,
     )
 
     # -----------------------------------------------------------------------
