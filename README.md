@@ -190,6 +190,84 @@ branch, so it prints `git switch eval-<ENAME>` and the next tag (e.g. `…2026.0
 the serial restarts at `000` in a new month). It warns if notebooks from the earlier tag are
 missing from this render, which usually means `mkfigs.restore` was skipped.
 
+## Running from GitHub Actions
+
+`.github/workflows/mkfigs.yml` is a reusable workflow that runs the workflows above from a paper repo's
+**Actions** tab, doing the Gadi steps over SSH. **How to use it** (the form, and step-by-step recipes) is in
+each paper repo's README, under "For maintainers: running the notebooks and publishing with GitHub Actions"
+([access-om3-paper-1](https://github.com/ACCESS-Community-Hub/access-om3-paper-1#for-maintainers-running-the-notebooks-and-publishing-with-github-actions),
+[access-cm3-paper-1](https://github.com/ACCESS-Community-Hub/access-cm3-paper-1#for-maintainers-running-the-notebooks-and-publishing-with-github-actions)).
+Its Gadi plumbing comes from [access-om3-live](https://github.com/chrisb13/access-om3-live): the SSH set-up
+(`ci/gadi/ssh_setup.sh`, which access-om3-live took from ACCESS-NRI/COSIMA-recipes-workflow), the secret
+names, the `qstat` wait and the `rsync` of results.
+
+| Mode | Run from | What runs | Publishes? |
+|---|---|---|---|
+| `new experiment` | `main` only | The `mkfigs.sh` array, or the listed notebooks | Yes, after a second approval |
+| `update a published experiment` | `main` only | Only the listed notebooks, on top of `eval-<ENAME>`; earlier results restored | Yes, as a new Figshare version |
+| `preview a branch` | any branch of the repo | The listed notebooks, on one or more experiments | Never |
+
+Jobs: `plan` checks the inputs; `run` (environment `mkfigs`, no Figshare token, once per experiment) runs the
+notebooks on Gadi and builds a preview on the runner (`mkfigs-preview`, `mkfigs-gallery`), attached to the run
+for 10 days; `publish` (environment `mkfigs-publish`) uploads to Figshare, runs `mkfigs.pushit --publish`,
+commits and tags on Gadi, and pushes `eval-<ENAME>` and the tag from the runner. Only branches of the paper
+repo are run, never forks; the modes refuse the wrong kind of experiment, and an update's publish refuses if
+`eval-<ENAME>` moved meanwhile.
+
+### One-off set-up in a paper repo
+
+1. Bump `external/access-model-mkfigs` to a version with `mkfigs.set_experiment`, `mkfigs.gallery`
+   and `pushit --publish` (or, until then, run with `mkfigs_version: latest release`).
+2. Add a caller workflow, e.g. `.github/workflows/mkfigs.yml`:
+
+   ```yaml
+   name: mkfigs
+   on:
+     workflow_dispatch:
+       inputs:
+         mode: {description: "What to do", type: choice, options: [new experiment, update a published experiment, preview a branch], default: new experiment}
+         ename: {description: "Experiment name (preview: one or more)", required: true}
+         esm_file: {description: "Datastore .json on Gadi (update: blank = as published)", required: false, default: ""}
+         notebooks: {description: "Notebooks to run (needed for update and preview)", required: false, default: ""}
+         pick_up_jobs: {description: "Pick up the last run's jobs", type: boolean, default: false}
+         mkfigs_version: {description: "access-model-mkfigs to run", type: choice, options: [pinned, latest release, master], default: pinned}
+   concurrency:   # one new/update run per experiment at a time (previews are queued per experiment inside)
+     group: mkfigs-${{ inputs.mode == 'preview a branch' && github.run_id || inputs.ename }}
+   jobs:
+     mkfigs:
+       uses: ACCESS-NRI/access-model-mkfigs/.github/workflows/mkfigs.yml@<tag>
+       permissions:
+         contents: write                 # the publish job pushes eval-<ENAME> and its tag
+       with:
+         mode: ${{ inputs.mode }}
+         ename: ${{ inputs.ename }}
+         esm_file: ${{ inputs.esm_file }}
+         notebooks: ${{ inputs.notebooks }}
+         pick_up_jobs: ${{ inputs.pick_up_jobs }}
+         mkfigs_version: ${{ inputs.mkfigs_version }}
+         notebooks-dir: notebooks        # notebooks/polished-python for access-cm3-paper-1
+       secrets: inherit
+   ```
+
+3. A repo admin creates two environments under **Settings → Environments**:
+
+   | | `mkfigs` | `mkfigs-publish` |
+   |---|---|---|
+   | Required reviewers | who may start runs | 2–3 people |
+   | Prevent self-review | off | **on** |
+   | Allow administrators to bypass | either | **off** |
+   | Secrets | `GADI_USER`, `GADI_KEY` (and `GADI_KEY_PASSPHRASE` if it has one), `GADI_WORK_DIR` | the same, plus `FIGSHARE_TOKEN` |
+   | Variables | `GADI_PROJECT` (NCI project the jobs are charged to) | |
+
+   Keep these secrets **only** in the environments, not as repository secrets: a repository secret
+   can be read by a workflow on any branch, without approval. Use an SSH key made just for this
+   workflow, so it can be revoked on its own; the Figshare articles belong to whoever owns
+   `FIGSHARE_TOKEN`. If the repo has rules protecting branches or tags, they must let GitHub
+   Actions push `eval-*` branches and their tags.
+
+On Gadi, the workflow keeps one checkout per experiment, `$GADI_WORK_DIR/<repo>/<ENAME>/` (previews:
+`.../preview/<ENAME>/`), plus `<ENAME>.ci/` next to it for its settings, job id, git plan and git bundle.
+
 ## Command reference
 
 | Command | Purpose |

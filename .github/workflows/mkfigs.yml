@@ -1,0 +1,469 @@
+# Run a paper repo's mkfigs.sh workflow on Gadi from GitHub Actions. Called from each paper repo;
+# see "Running from GitHub Actions" in README.md for the caller workflow and the one-off set-up.
+#
+# Three modes:
+#   new experiment                 From main. Run the notebooks for an experiment not yet published.
+#   update a published experiment  From main. Start from its eval-<ENAME> branch, take ONLY the
+#                                  listed notebooks from main, restore the earlier results.
+#   preview a branch               From any branch of the repo (e.g. a PR's), on a list of
+#                                  experiments, one job each. Like an update for a published
+#                                  experiment, a plain run otherwise. Never publishes.
+#
+#   plan     Check the inputs and list the experiments to run.
+#   run      For each: run the notebooks on Gadi and build a preview of the site on the runner.
+#            Nothing goes to Figshare. Attaches, for 10 days, a one-file preview page that opens in
+#            the browser (mkfigs-gallery) and the whole site as a zip.
+#   publish  New and update only, after a second approval: upload to Figshare and publish (a new
+#            article, or a new version; cannot be undone), commit and tag, push eval-<ENAME>.
+#
+# The Gadi plumbing (SSH set-up, secret names, the qstat wait, the rsync of results) is adapted from
+# access-om3-live's .github/workflows/live.yml (https://github.com/chrisb13/access-om3-live).
+#
+# The run and publish jobs use GitHub environments in the CALLING repo, which hold their secrets
+# and decide who may approve them:
+#   mkfigs          GADI_USER, GADI_KEY (+ GADI_KEY_PASSPHRASE), GADI_WORK_DIR secrets and a
+#                   GADI_PROJECT variable. No Figshare token.
+#   mkfigs-publish  The same Gadi secrets, plus FIGSHARE_TOKEN.
+name: mkfigs
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "'new experiment', 'update a published experiment' or 'preview a branch'"
+        type: string
+        default: new experiment
+      ename:
+        description: >-
+          Experiment name (Figshare article title, docs pages, eval-<ENAME> branch and tag). For a
+          preview: one or more, space-separated; NAME=/path/to/datastore.json for an unpublished one.
+        type: string
+        required: true
+      esm_file:
+        description: "Datastore .json on Gadi: needed for a new experiment; update: blank = as published"
+        type: string
+        default: ''
+      notebooks:
+        description: Space-separated notebooks to run (needed for update and preview; new, blank = all)
+        type: string
+        default: ''
+      parameters:
+        description: >-
+          Extra papermill parameters for every notebook, space-separated NAME=VALUE (e.g. NYEARS=5).
+          Blank: none for a new experiment; as published for an update or a preview of a published one.
+        type: string
+        default: ''
+      notebooks-dir:
+        description: Directory with mkfigs.sh, relative to the repo root
+        type: string
+        default: notebooks
+      pick_up_jobs:
+        description: Don't submit again; wait for the jobs the last run of this experiment submitted
+        type: boolean
+        default: false
+      mkfigs_version:
+        description: >-
+          access-model-mkfigs to run: 'pinned' (new: the branch's external/access-model-mkfigs;
+          update and preview of a published experiment: the version it was made with),
+          'latest release' (newest v* tag) or 'master'. A non-pinned version is recorded.
+        type: string
+        default: pinned
+
+env:
+  NOTEBOOKS: ${{ inputs.notebooks }}
+  PARAMETERS: ${{ inputs.parameters }}
+  NB_DIR: ${{ inputs.notebooks-dir }}
+  MKFIGS_VERSION: ${{ inputs.mkfigs_version }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  plan:
+    name: Check inputs
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      ename: ${{ steps.plan.outputs.ename }}
+      mkfigs_sha: ${{ steps.plan.outputs.mkfigs_sha }}
+    steps:
+      # The same checks as mkfigs.set_experiment, made before anything reaches Gadi.
+      - name: Check inputs and list the experiments
+        id: plan
+        env:
+          MODE_LABEL: ${{ inputs.mode }}
+          ENAMES: ${{ inputs.ename }}
+          ESM_FILE: ${{ inputs.esm_file }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          MKFIGS_REPO: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          name_re='^[A-Za-z0-9][A-Za-z0-9._+-]*$'
+          esm_re='^/(g/data|scratch)/[a-z0-9]+/[A-Za-z0-9._+/-]+\.json$'
+          esm_ok() { [[ $1 =~ $esm_re && $1 != *'/../'* && $1 != *'/./'* ]]; }
+          case $MODE_LABEL in
+            "new experiment") mode=new ;;
+            "update a published experiment") mode=update ;;
+            "preview a branch") mode=preview ;;
+            *) fail "mode: 'new experiment', 'update a published experiment' or 'preview a branch'" ;;
+          esac
+          if [[ $mode != preview && $GITHUB_REF != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            fail "'$MODE_LABEL' runs from $DEFAULT_BRANCH only (this is $GITHUB_REF_NAME). To try a branch, use 'preview a branch'."
+          fi
+          for nb in $NOTEBOOKS; do [[ $nb =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "notebooks: bad name '$nb'"; done
+          [[ $mode == new || -n $NOTEBOOKS ]] || fail "notebooks: list the notebooks to run"
+          [[ $NB_DIR =~ ^[A-Za-z0-9._/-]+$ && $NB_DIR != *..* ]] || fail "notebooks-dir: bad path"
+          seen=" "
+          for p in $PARAMETERS; do   # the same checks as mkfigs.run.parse_parameters
+            [[ $p =~ ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._:/+-]+$ ]] \
+              || fail "parameters: '$p': NAME=VALUE (value: letters, digits and . _ : / + -)"
+            n=${p%%=*}
+            case $n in esm_file|papermill|cwd|nbname) fail "parameters: $n is set by mkfigs" ;; esac
+            [[ $seen != *" $n "* ]] || fail "parameters: $n is given twice"; seen+="$n "
+          done
+
+          read -ra entries <<< "$ENAMES"
+          [ ${#entries[@]} -gt 0 ] || fail "ename: give an experiment name"
+          if [[ $mode == preview ]]; then
+            [ -z "$ESM_FILE" ] || fail "esm_file: not used for a preview; write NAME=/path/to/datastore.json in ename"
+          else
+            [ ${#entries[@]} -eq 1 ] || fail "ename: one experiment (several only for a preview)"
+            [[ ${entries[0]} == *=* ]] && fail "ename: just the name (the datastore goes in esm_file)"
+            [[ $mode == update && -z $ESM_FILE ]] || esm_ok "$ESM_FILE" \
+              || fail "esm_file: a .json under /g/data/<project>/ or /scratch/<project>/"
+            entries=("${entries[0]}${ESM_FILE:+=$ESM_FILE}")
+          fi
+          matrix='[]'
+          for e in "${entries[@]}"; do
+            name=${e%%=*}; esm=; [[ $e == *=* ]] && esm=${e#*=}
+            [[ $name =~ $name_re ]] || fail "ename: '$name': letters, digits, . _ + - only"
+            [ -z "$esm" ] || esm_ok "$esm" || fail "ename: '$e': datastore must be a .json under /g/data/<project>/ or /scratch/<project>/"
+            matrix=$(jq -c --arg n "$name" --arg e "$esm" '. + [{ename: $n, esm: $e}]' <<< "$matrix")
+          done
+          [[ $(jq '[.[].ename] | unique | length' <<< "$matrix") == "${#entries[@]}" ]] || fail "ename: a name is listed twice"
+
+          # The access-model-mkfigs commit to use, fixed now so every job (and Gadi) uses the same one.
+          url="https://github.com/$MKFIGS_REPO"
+          case $MKFIGS_VERSION in
+            pinned) mkfigs_sha= ;;
+            master) mkfigs_sha=$(git ls-remote "$url" refs/heads/master | cut -f1) ;;
+            "latest release")
+              tag=$(git ls-remote --tags --refs "$url" 'v*' | sed 's#.*refs/tags/##' | sort -V | tail -1)
+              # An annotated tag's commit is the peeled ^{} line, which sorts last.
+              mkfigs_sha=$(git ls-remote "$url" "refs/tags/$tag" "refs/tags/$tag^{}" | sort -k2 | tail -1 | cut -f1)
+              echo "latest access-model-mkfigs release: $tag" ;;
+            *) fail "mkfigs_version: pinned, latest release or master" ;;
+          esac
+          [[ $MKFIGS_VERSION == pinned || $mkfigs_sha =~ ^[0-9a-f]{40}$ ]] \
+            || fail "could not find access-model-mkfigs '$MKFIGS_VERSION' in $url"
+
+          { echo "mode=$mode"; echo "matrix=$matrix"; echo "ename=$(jq -r '.[0].ename' <<< "$matrix")"
+            echo "mkfigs_sha=$mkfigs_sha"; } >> "$GITHUB_OUTPUT"
+          echo "$MODE_LABEL from $GITHUB_REF_NAME: $(jq -r '[.[].ename] | join(", ")' <<< "$matrix")"
+
+  run:
+    name: Run ${{ matrix.ename }} on Gadi, build a preview
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: mkfigs
+    timeout-minutes: 355   # GitHub's limit is 6 h; the wait below stops at 5 h, leaving time for the build
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    concurrency:   # one run per experiment at a time; previews have their own checkouts on Gadi
+      group: mkfigs-${{ needs.plan.outputs.mode == 'preview' && 'preview' || 'main' }}-${{ matrix.ename }}
+      cancel-in-progress: false
+    outputs:
+      base: ${{ steps.runinfo.outputs.base }}
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      ENAME: ${{ matrix.ename }}
+      ESM_FILE: ${{ matrix.esm }}
+      GADI: ${{ secrets.GADI_USER }}@gadi.nci.org.au
+      WORK: ${{ secrets.GADI_WORK_DIR }}
+    steps:
+      - name: Check secrets
+        env:
+          GADI_USER: ${{ secrets.GADI_USER }}
+          GADI_KEY: ${{ secrets.GADI_KEY }}
+          GADI_WORK_DIR: ${{ secrets.GADI_WORK_DIR }}
+          GADI_PROJECT: ${{ vars.GADI_PROJECT }}
+        run: |
+          for v in GADI_USER GADI_KEY GADI_WORK_DIR; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is not set in this repo's 'mkfigs' environment"; exit 1; }
+          done
+          [ -n "$GADI_PROJECT" ] || { echo "::error::variable GADI_PROJECT is not set in this repo's 'mkfigs' environment"; exit 1; }
+
+      - name: Check out the Gadi script
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mkfigs-ci
+          sparse-checkout: ci/gadi
+
+      # Copied from ACCESS-NRI/COSIMA-recipes-workflow, via access-om3-live.
+      - name: Configure SSH for Gadi
+        env:
+          GADI_KEY: ${{ secrets.GADI_KEY }}
+          GADI_KEY_PASSPHRASE: ${{ secrets.GADI_KEY_PASSPHRASE }}
+        run: bash mkfigs-ci/ci/gadi/ssh_setup.sh
+
+      - name: Send settings and script to Gadi
+        env:
+          GADI_PROJECT: ${{ vars.GADI_PROJECT }}
+          PICK_UP: ${{ inputs.pick_up_jobs }}
+          MKFIGS_SHA: ${{ needs.plan.outputs.mkfigs_sha }}
+        run: |
+          set -euo pipefail
+          # One checkout per experiment, <checkout>.ci next to it. Previews get their own, so they
+          # never touch the checkout of a new/update run that may be waiting to publish.
+          STATE="$WORK/${GITHUB_REPOSITORY##*/}/$([ "$MODE" = preview ] && echo preview/)$ENAME.ci"
+          { echo "STATE=$STATE"; echo "CHECKOUT=${STATE%.ci}"; } >> "$GITHUB_ENV"
+          echo "gadi() { ssh \"\$GADI\" bash $(printf %q "$STATE/mkfigs_ci.sh") $(printf %q "$STATE") \"\$@\"; }" > gadi.sh
+          ssh "$GADI" mkdir -p "$(printf %q "$STATE")"
+          rsync mkfigs-ci/ci/gadi/mkfigs_ci.sh "$GADI:$STATE/"
+          if [ "$PICK_UP" = true ]; then
+            # Keep the earlier run's settings: its checkout, commit and jobs are what we pick up.
+            echo "Picking up the last run of $ENAME (the other inputs are ignored)"
+          else
+            {
+              printf 'MODE=%q\n' "$MODE";             printf 'WORK=%q\n' "$WORK"
+              printf 'REPO=%q\n' "$GITHUB_REPOSITORY"; printf 'REF=%q\n' "$GITHUB_REF_NAME"
+              printf 'SHA=%q\n' "$GITHUB_SHA";        printf 'ENAME=%q\n' "$ENAME"
+              printf 'ESMDIR=%q\n' "$ESM_FILE";       printf 'NOTEBOOKS=%q\n' "$NOTEBOOKS"
+              printf 'NB_DIR=%q\n' "$NB_DIR";         printf 'PROJECT=%q\n' "$GADI_PROJECT"
+              printf 'RUN_URL=%q\n' "$RUN_URL";       printf 'ACTOR=%q\n' "$GITHUB_ACTOR"
+              printf 'ACTOR_ID=%q\n' "$GITHUB_ACTOR_ID"; printf 'MKFIGS_SHA=%q\n' "$MKFIGS_SHA"
+              printf 'PARAMETERS=%q\n' "$PARAMETERS"
+            } > ci.env
+            rsync ci.env "$GADI:$STATE/"
+          fi
+
+      - name: Check out the paper repo on Gadi and set mkfigs.sh
+        if: ${{ !inputs.pick_up_jobs }}
+        run: source gadi.sh && gadi prepare
+
+      - name: Submit the PBS jobs
+        if: ${{ !inputs.pick_up_jobs }}
+        run: |
+          set -o pipefail
+          source gadi.sh && gadi submit
+
+      - name: Wait for the PBS jobs
+        run: |
+          source gadi.sh
+          deadline=$((SECONDS + 300 * 60))
+          while true; do
+            s=$(gadi status) || s="(could not reach Gadi; trying again)"; echo "$(date -u +%H:%MZ) $s"
+            [[ $s == *state=F* ]] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::The jobs are still running after 5 h. Run this workflow again with 'pick_up_jobs' ticked once they finish."
+              exit 1
+            fi
+            sleep 300
+          done
+
+      # The preview is built here: the same tree as on Gadi (BASE plus the edits prepare made,
+      # as a patch) and a copy of the run output. The checkout on Gadi stays untouched until publish.
+      - name: Read the run's settings from Gadi
+        id: runinfo
+        run: |
+          set -euo pipefail
+          ssh "$GADI" cat "$(printf %q "$STATE/run.env")" > run.env
+          rsync "$GADI:$STATE/changes.patch" "$RUNNER_TEMP/changes.patch"
+          source run.env
+          [[ $BASE =~ ^[0-9a-f]{40}$ && $MKFIGS_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "::error::bad run.env"; exit 1; }
+          { echo "base=$BASE"; echo "mkfigs_commit=$MKFIGS_COMMIT"; echo "esmdir=$ESMDIR"
+            echo "parameters=$RUN_PARAMETERS"; } >> "$GITHUB_OUTPUT"
+          { echo "MODE=$MODE"; echo "PUBLISHED=$PUBLISHED"; } >> "$GITHUB_ENV"   # the run's own (matters when picking up jobs)
+
+      - name: Check out the paper repo (the commit the run started from)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.runinfo.outputs.base }}
+          path: paper
+          submodules: recursive
+
+      - name: Apply the run's edits and its access-model-mkfigs
+        env:
+          MKFIGS_COMMIT: ${{ steps.runinfo.outputs.mkfigs_commit }}
+        run: |
+          set -euo pipefail
+          m=paper/external/access-model-mkfigs
+          if [ "$(git -C $m rev-parse HEAD)" != "$MKFIGS_COMMIT" ]; then
+            git -C $m fetch -q --depth 1 origin "$MKFIGS_COMMIT" && git -C $m checkout -q --detach "$MKFIGS_COMMIT"
+          fi
+          [ -s "$RUNNER_TEMP/changes.patch" ] && git -C paper apply --binary "$RUNNER_TEMP/changes.patch"
+          git -C paper status --short | head -50
+
+      - name: Copy the run output back
+        run: |
+          set -euo pipefail
+          rsync -a "$GADI:$CHECKOUT/$NB_DIR/mkfigs_output_$ENAME" "paper/$NB_DIR/"
+          du -sh "paper/$NB_DIR/mkfigs_output_$ENAME"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build the site and the preview page (no Figshare)
+        env:
+          BASE: ${{ steps.runinfo.outputs.base }}
+          RUN_PARAMETERS: ${{ steps.runinfo.outputs.parameters }}
+        run: |
+          set -euo pipefail
+          pip install -q -r paper/documentation/requirements.txt ./paper/external/access-model-mkfigs
+          case $MODE/$PUBLISHED in
+            preview/yes) NOTE="Preview of $GITHUB_REF_NAME (${GITHUB_SHA:0:7}): its $NOTEBOOKS re-run on the published $ENAME." ;;
+            preview/*)   NOTE="Preview of $GITHUB_REF_NAME (${GITHUB_SHA:0:7}) on $ENAME." ;;
+            update/*)    NOTE="Update of the published $ENAME: $NOTEBOOKS from $GITHUB_REF_NAME (${GITHUB_SHA:0:7}), earlier results restored." ;;
+            *)           NOTE="Built from $GITHUB_REPOSITORY at ${BASE:0:7} ($GITHUB_REF_NAME)." ;;
+          esac
+          python -m mkfigs.preview --ename "$ENAME" --preview-dir "$RUNNER_TEMP/preview" paper
+          python -m mkfigs.gallery "$RUNNER_TEMP/preview/site" "$ENAME" "preview-$ENAME.html" \
+            --run-url "$RUN_URL" --artifact "site-$ENAME" \
+            --note "$NOTE${RUN_PARAMETERS:+ Papermill parameters: $RUN_PARAMETERS.} Artifacts are kept for 10 days."
+
+      - name: Attach the preview page (opens in the browser)
+        id: page
+        uses: actions/upload-artifact@v7
+        with:
+          path: preview-${{ matrix.ename }}.html
+          archive: false
+          retention-days: 10
+
+      - name: Attach the whole site (zip)
+        id: site
+        uses: actions/upload-artifact@v7
+        with:
+          name: site-${{ matrix.ename }}
+          path: ${{ runner.temp }}/preview/site
+          retention-days: 10
+
+      - name: Summary
+        env:
+          PAGE_URL: ${{ steps.page.outputs.artifact-url }}
+          SITE_URL: ${{ steps.site.outputs.artifact-url }}
+          ESMDIR: ${{ steps.runinfo.outputs.esmdir }}
+          RUN_PARAMETERS: ${{ steps.runinfo.outputs.parameters }}
+        run: |
+          {
+            case $MODE in
+              new) echo "### $ENAME (new experiment)" ;;
+              update) echo "### $ENAME (update of a published experiment)" ;;
+              *) echo "### $ENAME (preview of $GITHUB_REF_NAME)" ;;
+            esac
+            echo
+            v=$(git -C paper/external/access-model-mkfigs describe --tags --always)
+            case $MKFIGS_VERSION/$PUBLISHED in
+              pinned/yes) why="pinned: the version this experiment was published with (\`eval-$ENAME\`)" ;;
+              pinned/*)   why="pinned: the version \`external/access-model-mkfigs\` records on $GITHUB_REF_NAME" ;;
+              *)          why="$MKFIGS_VERSION, chosen instead of the pinned version" ;;
+            esac
+            echo "access-model-mkfigs **$v**: $why  "
+            echo "Datastore: \`$ESMDIR\`  "
+            echo "Papermill parameters: ${RUN_PARAMETERS:-(none)}"
+            echo
+            echo "**[Open the preview page]($PAGE_URL)** (figures and captions, in the browser; kept 10 days)"
+            echo
+            echo "Whole site, rendered notebooks included: [site-$ENAME.zip]($SITE_URL), or"
+            echo '```'
+            echo "gh run download $GITHUB_RUN_ID -R $GITHUB_REPOSITORY -n site-$ENAME -D site-$ENAME"
+            echo "python3 -m http.server -d site-$ENAME"
+            echo '```'
+            echo "Notebooks:"
+            echo '```'
+            grep -E '^ +(OK|FAILED|NOT RUN|PREV COMMITTED)' "$RUNNER_TEMP/preview/pushit.log" || true
+            echo '```'
+            case $MODE in
+              preview) echo "Preview only: nothing has gone to Figshare, and this run cannot publish." ;;
+              update) echo "Nothing has gone to Figshare. Approving **publish** adds these results to the published"
+                      echo "experiment as a new Figshare version (this cannot be undone) and commits them on"
+                      echo "\`eval-$ENAME\` with the next tag." ;;
+              *) echo "Nothing has gone to Figshare. Approving **publish** creates the Figshare article, publishes it"
+                 echo "(this cannot be undone) and pushes \`eval-$ENAME\` and its tag." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # If the build failed, keep the raw figures so the run is not wasted.
+      - name: Attach the raw run output (only if the build failed)
+        if: ${{ failure() && hashFiles(format('paper/{0}/mkfigs_output_{1}/**', inputs.notebooks-dir, matrix.ename)) != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: output-${{ matrix.ename }}
+          path: paper/${{ inputs.notebooks-dir }}/mkfigs_output_${{ matrix.ename }}
+          retention-days: 10
+
+  publish:
+    name: Publish ${{ needs.plan.outputs.ename }} on Figshare, push eval branch and tag
+    needs: [plan, run]
+    if: ${{ needs.plan.outputs.mode != 'preview' }}
+    runs-on: ubuntu-latest
+    environment: mkfigs-publish
+    timeout-minutes: 120
+    permissions:
+      contents: write   # push eval-<ENAME> and its tag
+    env:
+      ENAME: ${{ needs.plan.outputs.ename }}
+      GADI: ${{ secrets.GADI_USER }}@gadi.nci.org.au
+      WORK: ${{ secrets.GADI_WORK_DIR }}
+    steps:
+      - name: Check secrets
+        env:
+          GADI_USER: ${{ secrets.GADI_USER }}
+          GADI_KEY: ${{ secrets.GADI_KEY }}
+          GADI_WORK_DIR: ${{ secrets.GADI_WORK_DIR }}
+          FIGSHARE_TOKEN: ${{ secrets.FIGSHARE_TOKEN }}
+        run: |
+          for v in GADI_USER GADI_KEY GADI_WORK_DIR FIGSHARE_TOKEN; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is not set in this repo's 'mkfigs-publish' environment"; exit 1; }
+          done
+
+      - name: Check out the paper repo at the commit the run started from (the bundle builds on it)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.run.outputs.base }}
+
+      - name: Check out the SSH set-up script
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mkfigs-ci
+          sparse-checkout: ci/gadi
+
+      - name: Configure SSH for Gadi
+        env:
+          GADI_KEY: ${{ secrets.GADI_KEY }}
+          GADI_KEY_PASSPHRASE: ${{ secrets.GADI_KEY_PASSPHRASE }}
+        run: bash mkfigs-ci/ci/gadi/ssh_setup.sh
+
+      - name: Upload to Figshare, publish, then commit and tag (on Gadi)
+        env:
+          FIGSHARE_TOKEN: ${{ secrets.FIGSHARE_TOKEN }}
+        run: |
+          set -euo pipefail
+          STATE="$WORK/${GITHUB_REPOSITORY##*/}/$ENAME.ci"
+          echo "STATE=$STATE" >> "$GITHUB_ENV"
+          ssh "$GADI" bash "$(printf %q "$STATE/mkfigs_ci.sh")" "$(printf %q "$STATE")" publish <<< "$FIGSHARE_TOKEN" \
+            | tee publish.log
+
+      - name: Push the eval branch and tag
+        run: |
+          set -euo pipefail
+          rsync "$GADI:$STATE/plan.json" "$GADI:$STATE/result.bundle" "$RUNNER_TEMP/"
+          branch=$(jq -r .branch "$RUNNER_TEMP/plan.json") tag=$(jq -r .tag "$RUNNER_TEMP/plan.json")
+          [[ $branch == "eval-$ENAME" && $tag =~ ^[A-Za-z0-9._+-]+$ ]] || { echo "::error::unexpected plan: $branch $tag"; exit 1; }
+          git fetch "$RUNNER_TEMP/result.bundle" "refs/heads/$branch:refs/heads/$branch" "refs/tags/$tag:refs/tags/$tag"
+          git push origin "refs/heads/$branch" "refs/tags/$tag"
+          {
+            echo "### $ENAME published"
+            grep -oE 'https://figshare.com/articles/figure/[0-9]+' publish.log | tail -1 | sed 's/^/Figshare: /' || true
+            echo
+            echo "Pushed branch \`$branch\` and tag \`$tag\`. Read the Docs builds the site from the tag."
+          } >> "$GITHUB_STEP_SUMMARY"
