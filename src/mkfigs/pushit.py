@@ -41,7 +41,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, date, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -1467,7 +1467,11 @@ def main() -> None:
     shown_sources = dict(sources)
     for e in entries:
         if is_external(e) and notebook_stem(e) not in shown_sources:
-            shown_sources[notebook_stem(e)] = describe_source(notebook_path(e, HERE, REPO))
+            info = describe_source(notebook_path(e, HERE, REPO))
+            if not info.get("repo"):  # no git checkout here (e.g. mkfigs-preview's copy): guess from the path
+                parent = PurePosixPath(e).parent
+                info["repo"] = (parent.parent if parent.name == "notebooks" else parent).name
+            shown_sources[notebook_stem(e)] = info
     source_cells = build_source_cells(
         ename, _all_listed, shown_sources, linked={*ok_nbs, *prev_committed_nbs} - set(failed_nbs),
     )
