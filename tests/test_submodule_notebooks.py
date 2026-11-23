@@ -83,8 +83,44 @@ def test_describe_source_of_a_real_git_repo(tmp_path):
     assert info["url"] == OM3_URL
     assert len(info["commit"]) == 40
     assert info["path"] == "notebooks/SST.ipynb"
+    assert info["authors"] == ["x"]
+    assert info["submodule"] == ""  # not inside a superproject here
     link = _sources.source_link_md(info)
     assert link == f"[`access-om3-paper-1`@`{info['commit'][:7]}`]({OM3_URL}/blob/{info['commit']}/notebooks/SST.ipynb)"
+
+
+def test_notebook_authors_creator_first_then_by_commits(tmp_path):
+    repo = tmp_path / "om3"
+    (repo / "notebooks").mkdir(parents=True)
+    nb = repo / "notebooks" / "SST.ipynb"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for i, who in enumerate(["Creator", "Bea", "Al", "Al"]):
+        nb.write_text(str(i))
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", f"user.name={who}", "-c", "user.email=x@x",
+                        "-c", "commit.gpgsign=false", "commit", "-q", "-m", str(i)], check=True)
+    assert _sources.notebook_authors(repo, "notebooks/SST.ipynb") == ["Creator", "Al", "Bea"]
+
+
+CONFIGDOC_HEADER = (
+    "# SST\n \nEvaluation figures from ACCESS-CM3 experiment **e** produced by notebook `SST.ipynb`."
+    " Co-authors for this notebook (via Git history): unknown. [View rendered notebook](notebooks/SST.ipynb)\n"
+)
+
+
+def test_rewrite_page_header_names_the_source_repo_and_its_authors(tmp_path):
+    md = tmp_path / "SST.md"
+    md.write_text(CONFIGDOC_HEADER + "\n## Fig\n")
+    info = {"repo": "access-om3-paper-1", "url": OM3_URL, "commit": "c" * 40, "path": "notebooks/SST.ipynb",
+            "submodule": "external/access-om3-paper-1", "authors": ["A. Kiss", "C. Bull"]}
+    assert _sources.rewrite_page_header(md, info, "https://x/as-run.ipynb") is True
+    text = md.read_text()
+    assert f"from the [`access-om3-paper-1`]({OM3_URL}) repository of metrics" in text
+    assert "`external/access-om3-paper-1`" in text
+    assert "[as run](https://x/as-run.ipynb)" in text
+    assert "(via Git history of `access-om3-paper-1`): A. Kiss, C. Bull. [View rendered notebook]" in text
+    assert "unknown" not in text and text.endswith("## Fig\n")
+    assert _sources.rewrite_page_header(md, info) is False  # idempotent
 
 
 # ---------------------------------------------------------------------------
@@ -200,11 +236,13 @@ def _seed(repo: Path, notebooks: list[str], om3_sources: dict[str, str]):
     for nb in notebooks:
         make_rendered_notebook(ofol / f"{nb}_rendered.ipynb")
         make_png(mdfol / f"{nb}_01.png")
-        (mdfol / f"{nb}.md").write_text(f"# {nb}\n\n![fig](/assets/experiments/{ENAME}/{nb}_01.png)\n")
+        (mdfol / f"{nb}.md").write_text(CONFIGDOC_HEADER.replace("SST", nb)
+                                        + f"\n![fig](/assets/experiments/{ENAME}/{nb}_01.png)\n")
     (mdfol / "sources").mkdir()
     for nb, commit in om3_sources.items():
         (mdfol / "sources" / f"{nb}.json").write_text(json.dumps(
-            {"repo": "access-om3-paper-1", "url": OM3_URL, "commit": commit, "path": f"notebooks/{nb}.ipynb"}))
+            {"repo": "access-om3-paper-1", "url": OM3_URL, "commit": commit, "path": f"notebooks/{nb}.ipynb",
+             "submodule": "external/access-om3-paper-1", "authors": ["Om Three"]}))
 
 
 def _pushit(args):
@@ -240,7 +278,15 @@ def test_pushit_keeps_submodule_untouched_and_writes_as_run_copy(cm3_repo, fake_
     assert "TOA_CRE" not in urls["_sources"]
 
     index = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
-    assert "| Notebook | Notebook run success? | Source | GitHub Issue(s) | Links |" in index
+    assert ("| Notebook | Notebook run success? | Source (access-om3-paper-1: upstream&nbsp;·&nbsp;as&nbsp;run)"
+            " | GitHub Issue(s) | Links |") in index
+    intro = index.split("<!-- experiments -->")[0]
+    assert "[access-cm3-paper-1](https://github.com/ACCESS-Community-Hub/access-cm3-paper-1/) and the" in intro
+    assert f"[access-om3-paper-1]({OM3_URL}/)" in intro
+    assert ("`access-om3-paper-1` is a git submodule of `access-cm3-paper-1` (`external/access-om3-paper-1`)"
+            in intro)
+    assert (f"[`eval-{ENAME}`](https://github.com/ACCESS-Community-Hub/access-cm3-paper-1/tree/eval-{ENAME}"
+            "/notebooks/access-om3-paper-1)") in intro
     blob = f"https://github.com/ACCESS-Community-Hub/access-cm3-paper-1/blob/eval-{ENAME}/notebooks"
     sst_row = next(ln for ln in index.splitlines() if ln.startswith("| `SST`"))
     assert f"({OM3_URL}/blob/{'b' * 40}/notebooks/SST.ipynb)" in sst_row
@@ -248,6 +294,11 @@ def test_pushit_keeps_submodule_untouched_and_writes_as_run_copy(cm3_repo, fake_
     toa_row = next(ln for ln in index.splitlines() if ln.startswith("| `TOA_CRE`"))
     assert f"[`access-cm3-paper-1`]({blob}/TOA_CRE.ipynb)" in toa_row
     assert "**Source:**" in index
+
+    sst_page = (exp / "SST.md").read_text()
+    assert "repository of metrics" in sst_page and "(via Git history of `access-om3-paper-1`): Om Three." in sst_page
+    assert f"[as run]({blob}/access-om3-paper-1/SST.ipynb)" in sst_page
+    assert "Co-authors for this notebook (via Git history): unknown." in (exp / "TOA_CRE.md").read_text()
 
 
 def test_pushit_check_upload_git_adds_the_as_run_copy(cm3_repo, fake_figshare, monkeypatch, capsys):
