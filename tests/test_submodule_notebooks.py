@@ -85,8 +85,18 @@ def test_describe_source_of_a_real_git_repo(tmp_path):
     assert info["path"] == "notebooks/SST.ipynb"
     assert info["authors"] == ["x"]
     assert info["submodule"] == ""  # not inside a superproject here
+    assert info["cff_authors"] == []  # no CITATION.cff
     link = _sources.source_link_md(info)
-    assert link == f"[`access-om3-paper-1`@`{info['commit'][:7]}`]({OM3_URL}/blob/{info['commit']}/notebooks/SST.ipynb)"
+    assert link == f"`access-om3-paper-1`: [`@{info['commit'][:7]}`]({OM3_URL}/blob/{info['commit']}/notebooks/SST.ipynb)"
+
+
+def test_cff_author_names(tmp_path):
+    cff = tmp_path / "CITATION.cff"
+    cff.write_text("authors:\n  - given-names: Andrew E.\n    family-names: Kiss\n"
+                   "  - given-names: Chris\n    family-names: Bull\n")
+    assert _sources.cff_author_names(cff) == ["Kiss, Andrew E.", "Bull, Chris"]
+    assert _sources.authors_md(_sources.cff_author_names(cff)) == "**authors (alphabetically):** Bull, Chris; Kiss, Andrew E."
+    assert _sources.cff_author_names(tmp_path / "missing.cff") == []
 
 
 def test_notebook_authors_creator_first_then_by_commits(tmp_path):
@@ -242,7 +252,8 @@ def _seed(repo: Path, notebooks: list[str], om3_sources: dict[str, str]):
     for nb, commit in om3_sources.items():
         (mdfol / "sources" / f"{nb}.json").write_text(json.dumps(
             {"repo": "access-om3-paper-1", "url": OM3_URL, "commit": commit, "path": f"notebooks/{nb}.ipynb",
-             "submodule": "external/access-om3-paper-1", "authors": ["Om Three"]}))
+             "submodule": "external/access-om3-paper-1", "authors": ["Om Three"],
+             "cff_authors": ["Three, Om", "Kiss, Andrew E."]}))
 
 
 def _pushit(args):
@@ -278,7 +289,7 @@ def test_pushit_keeps_submodule_untouched_and_writes_as_run_copy(cm3_repo, fake_
     assert "TOA_CRE" not in urls["_sources"]
 
     index = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
-    assert ("| Notebook | Notebook run success? | Source (access-om3-paper-1 notebooks: upstream&nbsp;·&nbsp;as&nbsp;run)"
+    assert ("| Notebook | Notebook run success? | Source (repo: @commit&nbsp;·&nbsp;as&nbsp;run)"
             " | GitHub Issue(s) | Links |") in index
     intro = index.split("<!-- experiments -->")[0]
     assert "[access-cm3-paper-1](https://github.com/ACCESS-Community-Hub/access-cm3-paper-1/) and the" in intro
@@ -292,8 +303,10 @@ def test_pushit_keeps_submodule_untouched_and_writes_as_run_copy(cm3_repo, fake_
     assert f"({OM3_URL}/blob/{'b' * 40}/notebooks/SST.ipynb)" in sst_row
     assert f"[as&nbsp;run]({blob}/access-om3-paper-1/SST.ipynb)" in sst_row
     toa_row = next(ln for ln in index.splitlines() if ln.startswith("| `TOA_CRE`"))
-    assert f"[`access-cm3-paper-1`]({blob}/TOA_CRE.ipynb)" in toa_row
+    assert f"`access-cm3-paper-1`: [as&nbsp;run]({blob}/TOA_CRE.ipynb)" in toa_row
     assert "**Source:**" in index
+    assert ("`ACCESS-Community-Hub/access-om3-paper-1/` **authors (alphabetically):** Kiss, Andrew E.; Three, Om.\n"
+            in intro)
 
     sst_page = (exp / "SST.md").read_text()
     assert "repository of metrics" in sst_page and "(via Git history of `access-om3-paper-1`): Om Three." in sst_page
@@ -310,7 +323,7 @@ def test_pushit_not_run_submodule_notebook_still_shows_its_repo(cm3_repo, fake_f
     _pushit(["--skip-figshare"])
     index = (repo / "documentation" / "docs" / "pages" / "index.md").read_text()
     sst_row = next(ln for ln in index.splitlines() if ln.startswith("| `SST`"))
-    assert f"[`access-om3-paper-1`@`ddddddd`]({OM3_URL}/blob/{'d' * 40}/notebooks/SST.ipynb)" in sst_row
+    assert f"`access-om3-paper-1`: [`@ddddddd`]({OM3_URL}/blob/{'d' * 40}/notebooks/SST.ipynb)" in sst_row
     assert "as&nbsp;run](" not in sst_row
     assert "git submodule of `access-cm3-paper-1`" in index
     exp = repo / "documentation" / "docs" / "pages" / "experiments" / ENAME

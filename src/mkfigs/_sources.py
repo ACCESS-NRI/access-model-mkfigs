@@ -96,8 +96,39 @@ def describe_source(nb_path: Path) -> dict[str, str]:
         # Recorded here because pushit's own author lookup searches the paper
         # repo's history, where this notebook has none.
         "authors": notebook_authors(Path(top), path) if top else [],
+        # The repo's CITATION.cff authors, for the landing page ("Family, Given").
+        "cff_authors": cff_author_names(Path(top) / "CITATION.cff") if top else [],
     }
     return info
+
+
+def cff_author_names(cff: Path) -> list[str]:
+    """'Family, Given' for each author in a CITATION.cff, in file order ([] if missing)."""
+    try:
+        lines = cff.read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    given = family = None
+    names = []
+    for line in lines:
+        line = line.strip()
+        if "given-names:" in line:
+            given = line.split(":", 1)[1].strip().strip('"')
+        elif line.startswith("family-names:"):
+            family = line.split(":", 1)[1].strip().strip('"')
+        if given and family:
+            names.append(f"{family}, {given}")
+            given = family = None
+    return names
+
+
+def authors_md(names: list[str]) -> str:
+    """'**authors (alphabetically):** A; B.' or '' when there are none."""
+    if not names:
+        return ""
+    joined = "; ".join(sorted(names))
+    # Avoid "Rashid, Harun A.." when the last name ends in an initial.
+    return "**authors (alphabetically):** " + joined + ("" if joined.endswith(".") else ".")
 
 
 def notebook_authors(repo_top: Path, relpath: str) -> list[str]:
@@ -167,11 +198,11 @@ def rewrite_page_header(md_path: Path, info: dict, as_run_url: str = "") -> bool
 
 
 def source_link_md(info: dict[str, str]) -> str:
-    """Markdown for a Source cell: the repo name, linked to the notebook at the commit that ran."""
+    """Markdown for a Source cell: "`repo`: [@abc1234](notebook upstream at the commit that ran)"."""
     repo = info.get("repo") or "submodule"
     url, commit, path = info.get("url"), info.get("commit"), info.get("path")
     if url and commit and path:
-        return f"[`{repo}`@`{commit[:7]}`]({url}/blob/{commit}/{path})"
+        return f"`{repo}`: [`@{commit[:7]}`]({url}/blob/{commit}/{path})"
     if url:
         return f"[`{repo}`]({url})"
     return f"`{repo}`"
