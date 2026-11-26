@@ -49,6 +49,7 @@ from . import get_mkfigs_version
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
 from .configdoc import get_docs_url, get_model_name, get_repo_slug, get_repo_url
 from ._paths import find_notebooks_dir, find_repo_root
+from .recipes import read_marker, recipe_stems_in, write_recipe_page
 
 
 def _check_nci_environment() -> None:
@@ -94,6 +95,16 @@ def _load_notebook_categories(notebooks_dir: Path) -> dict[str, list[int | str]]
     flat table.
     """
     return getattr(_load_mkfigs_issues_module(notebooks_dir), "CATEGORIES", {})
+
+
+def _load_recipe_categories(notebooks_dir: Path) -> dict[str, list[str]]:
+    """Load the optional RECIPE_CATEGORIES dict from mkfigs_issues.py.
+
+    RECIPE_CATEGORIES maps a sub-heading to a list of recipe stems; the recipes are then shown as
+    sub-groups of the "ESMValTool recipes" section and nav group (see group_recipes_by_category).
+    Returns {} when absent: one flat recipe table and nav group.
+    """
+    return getattr(_load_mkfigs_issues_module(notebooks_dir), "RECIPE_CATEGORIES", {})
 
 
 def _load_categories_source(notebooks_dir: Path) -> str | None:
@@ -143,6 +154,26 @@ def parse_mkfigs_sh() -> tuple[str, str, list[str]]:
     esmdir = esmdir.replace("${ENAME}", ename).replace("$ENAME", ename)
 
     return ename, esmdir, notebooks
+
+
+def parse_recipes_from_mkfigs_sh() -> list[str]:
+    """Parse the optional ESMValTool recipe list (a ``recipes=( ... )`` bash array) from mkfigs.sh.
+
+    Returns [] when mkfigs.sh has no such array, so paper repos that only use notebooks are unaffected.
+    Whole-line comments are dropped first, so a commented-out example array is never picked up.
+    """
+    sh = HERE / "mkfigs.sh"
+    if not sh.exists():
+        return []
+    text = "\n".join(l for l in sh.read_text().splitlines() if not l.lstrip().startswith("#"))
+    arr_match = re.search(r'\brecipes=\(\s*(.*?)\s*\)', text, re.DOTALL)
+    recipes: list[str] = []
+    if arr_match:
+        for raw in arr_match.group(1).splitlines():
+            stripped = raw.split("#", 1)[0].strip()
+            if stripped:
+                recipes.append(stripped)
+    return recipes
 
 
 HERE = _find_notebooks_dir()
@@ -207,7 +238,40 @@ def get_authors_md() -> str:
 # ---------------------------------------------------------------------------
 STATUS_HEADER = "Notebook run success?"
 UNCATEGORISED = "Miscellaneous"
+# ESMValTool recipes always get their own landing-page section and nav group, after the notebook categories.
+RECIPES_CATEGORY = "ESMValTool recipes"
+# Sub-group for recipes not listed in RECIPE_CATEGORIES (only used when RECIPE_CATEGORIES is set).
+UNCATEGORISED_RECIPES = "Other recipes"
 _ISSUE_NUM_RE = re.compile(r"/issues/(\d+)\b")
+
+
+def group_recipes_by_category(
+    recipes: list[str], recipe_categories: dict[str, list[str]] | None, warn: bool = False,
+) -> dict[str, list[str]]:
+    """Split recipe stems into RECIPE_CATEGORIES sub-groups, in RECIPE_CATEGORIES order.
+
+    A recipe listed under several sub-groups goes to the first. Recipes not listed go to
+    UNCATEGORISED_RECIPES (last). Empty sub-groups are dropped. Each group is sorted alphabetically.
+    Without RECIPE_CATEGORIES everything is one group named RECIPES_CATEGORY.
+    """
+    ordered = sorted(recipes, key=str.lower)
+    if not recipe_categories:
+        return {RECIPES_CATEGORY: ordered} if ordered else {}
+    grouped: dict[str, list[str]] = {}
+    placed: set[str] = set()
+    for cat, stems in recipe_categories.items():
+        members = [r for r in ordered if r in stems and r not in placed]
+        placed.update(members)
+        if members:
+            grouped.setdefault(cat, []).extend(members)
+    rest = [r for r in ordered if r not in placed]
+    if rest:
+        if warn:
+            for r in rest:
+                print(f"[categories] recipe '{r}' is not in RECIPE_CATEGORIES; listing it under "
+                      f"'{UNCATEGORISED_RECIPES}'.")
+        grouped.setdefault(UNCATEGORISED_RECIPES, []).extend(rest)
+    return grouped
 
 
 def _category_anchor(name: str) -> str:
@@ -303,15 +367,24 @@ def build_run_summary(
     mkfigs_version: str = "unknown",
     existing_run_versions: dict[str, str] | None = None,
     categories: dict[str, list[int | str]] | None = None,
+    recipes: set[str] | frozenset[str] | None = None,
+    recipe_categories: dict[str, list[str]] | None = None,
 ) -> tuple[str, str]:
     """Return (plain_text_summary, markdown_summary).
 
     ``notebook_issues`` maps notebook stem to a Markdown GitHub issue string,
     loaded from mkfigs_issues.py in the paper repo's notebooks/ directory.
 
+    ``recipes`` (optional) is the subset of the stems that are ESMValTool recipes
+    rather than notebooks: they get a "Recipe" link instead of a "Notebook" link,
+    and the table headings say "Notebook / recipe" so both kinds read naturally.
+
     ``categories`` (optional, CATEGORIES in mkfigs_issues.py) splits the
     notebook table into one sub-headed table per category, with a "Jump to"
     line above them. Without it a single flat table is produced.
+    Recipes always get their own "ESMValTool recipes" section (before Miscellaneous), whatever CATEGORIES says.
+    ``recipe_categories`` (optional, RECIPE_CATEGORIES in mkfigs_issues.py) splits that section into one
+    sub-headed table per sub-group (see group_recipes_by_category).
 
     Both contain the same information; the markdown version uses a table and
     bullet list suitable for embedding directly in pages/index.md.
@@ -338,7 +411,11 @@ def build_run_summary(
     # Markdown for pages/index.md — links included in table so no separate Sections block needed
     exp_dir = f"experiments/{ename}"
 
+    recipes = recipes or frozenset()
+
     def _links(nb: str) -> str:
+        if nb in recipes:
+            return f"[Figures]({exp_dir}/{nb}.md)&nbsp;·&nbsp;[Recipe]({exp_dir}/recipes/{nb}.md)"
         return f"[Figures]({exp_dir}/{nb}.md)&nbsp;·&nbsp;[Notebook]({exp_dir}/notebooks/{nb}/)"  # nbsp: keep on one line
 
     _status: dict[str, tuple[str, str]] = {}   # nb -> (run-success label, links cell)
@@ -355,9 +432,12 @@ def build_run_summary(
         # Stable order across runs: alphabetical within each category table.
         all_nbs = sorted(all_nbs, key=str.lower)
 
+    first_col = "Notebook / recipe" if recipes else "Notebook"
+    run_col = "Notebooks / recipes run" if recipes else "Notebooks run"
+
     def _table(nbs: list[str]) -> str:
         return (
-            f"| Notebook | {STATUS_HEADER} | GitHub Issue(s) | Links |\n"
+            f"| {first_col} | {STATUS_HEADER} | GitHub Issue(s) | Links |\n"
             "|---|---|---|---|\n"
             + "\n".join(
                 f"| `{nb}` | {_status[nb][0]} | {notebook_issues.get(nb, '')} | {_status[nb][1]} |"
@@ -366,15 +446,33 @@ def build_run_summary(
             + "\n"
         )
 
-    if categories:
-        grouped = group_notebooks_by_category(all_nbs, notebook_issues, categories, warn=True)
+    if categories or recipes:
+        notebooks_only = [nb for nb in all_nbs if nb not in recipes]
+        grouped = (group_notebooks_by_category(notebooks_only, notebook_issues, categories, warn=True)
+                   if categories else ({"Notebooks": notebooks_only} if notebooks_only else {}))
+        recipe_rows = [nb for nb in all_nbs if nb in recipes]
+        recipe_groups = group_recipes_by_category(recipe_rows, recipe_categories, warn=True)
+        if recipe_rows:  # own section, before Miscellaneous
+            misc = grouped.pop(UNCATEGORISED, None)
+            grouped[RECIPES_CATEGORY] = recipe_rows
+            if misc:
+                grouped[UNCATEGORISED] = misc
         jump = " · ".join(
             f"[{cat}](#{_category_anchor(cat)}) ({len(nbs)})" for cat, nbs in grouped.items()
         )
-        # Avoid Jinja's "{#" comment delimiter when mkdocs-macros renders this Markdown.
+
+        def _section(cat: str, nbs: list[str]) -> str:
+            # Avoid Jinja's "{#" comment delimiter when mkdocs-macros renders this Markdown.
+            head = f'### {cat} {{id="{_category_anchor(cat)}"}}\n\n'
+            if cat == RECIPES_CATEGORY and recipe_categories:
+                return head + "\n".join(
+                    f'#### {sub} {{id="{_category_anchor("recipes " + sub)}"}}\n\n{_table(rs)}'
+                    for sub, rs in recipe_groups.items()
+                )
+            return head + _table(nbs)
+
         tables_md = f"**Jump to:** {jump}\n\n" + "\n".join(
-            f'### {cat} {{id="{_category_anchor(cat)}"}}\n\n{_table(nbs)}'
-            for cat, nbs in grouped.items()
+            _section(cat, nbs) for cat, nbs in grouped.items()
         )
     else:
         tables_md = _table(all_nbs)
@@ -391,7 +489,7 @@ def build_run_summary(
         _by_run.setdefault((_nb_times[nb], _nb_versions[nb]), []).append(nb)
 
     run_time_md = (
-        "| Date | Notebooks run | access-model-mkfigs |\n"
+        f"| Date | {run_col} | access-model-mkfigs |\n"
         "|---|---|---|\n"
         + "\n".join(
             f"| {t} | {', '.join('`' + nb + '`' for nb in sorted(nbs))} | {_mkfigs_version_md(v)} |"
@@ -445,9 +543,13 @@ def _get_figshare_article_url(mdfol: Path, ename: str) -> str | None:
 # Figshare upload (per notebook: PNGs + rendered notebook with outputs)
 # ---------------------------------------------------------------------------
 def upload_figshare_for_notebook(
-    mdfol: Path, ofol: Path, ename: str, nb_name: str, token: str
+    mdfol: Path, ofol: Path, ename: str, nb_name: str, token: str, is_recipe: bool = False
 ) -> str | None:
     """Upload PNGs + the fully rendered notebook for *nb_name* to figshare.
+
+    With *is_recipe* (an ESMValTool recipe, see mkfigs.recipes) there is no rendered
+    notebook: only the PNGs are uploaded and the markdown rewritten. The recipe itself is
+    small and goes into git as recipes/<stem>.md, so it needs no Figshare URL.
 
     The rendered notebook (``<ofol>/<nb_name>_rendered.ipynb``) still has its
     cell outputs intact at this point — mkfigs_run.py strips them only for the
@@ -459,7 +561,9 @@ def upload_figshare_for_notebook(
     """
 
     nb_path = ofol / f"{nb_name}_rendered.ipynb"
-    if not nb_path.exists():
+    if is_recipe:
+        nb_path = None
+    elif not nb_path.exists():
         print(f"[figshare] WARNING: rendered notebook not found: {nb_path}")
         nb_path = None
 
@@ -680,6 +784,11 @@ def check_figshare_upload_mode(ename: str) -> None:
         for nb in ok_nbs
         if (experiment_docs_dir / f"{nb}.md").exists()
     ]
+    # ESMValTool recipes: their figure page and the recipe page (no notebook to add).
+    for rec in parse_recipes_from_mkfigs_sh():
+        for page in (experiment_docs_dir / f"{rec}.md", experiment_docs_dir / "recipes" / f"{rec}.md"):
+            if page.exists():
+                added_files.append(str(page.relative_to(REPO)))
     added_files += [
         urls_json_rel,
         "documentation/docs/pages/index.md",
@@ -989,14 +1098,31 @@ def _ensure_mkdocs_jupyter_plugin(data: dict) -> dict:
     return data
 
 
-def update_mkdocs_nav(ename: str, ok_nbs: list[str], dry_run: bool = False) -> None:
+def update_mkdocs_nav(
+    ename: str,
+    ok_nbs: list[str],
+    dry_run: bool = False,
+    recipes: set[str] | frozenset[str] | None = None,
+    recipe_categories: dict[str, list[str]] | None = None,
+) -> None:
     """Add (or replace) per-notebook nav entries in mkdocs.yml.
+
+    Recipes go in one "ESMValTool recipes" group after the notebooks, split into
+    RECIPE_CATEGORIES sub-groups when ``recipe_categories`` is given.
 
     Each notebook gets a top-level entry with summary and notebook sub-pages:
 
       - <nb>:
           - summary:  pages/experiments/<ename>/<nb>.md
           - notebook: pages/experiments/<ename>/notebooks/<nb>.ipynb
+
+    Stems in *recipes* (ESMValTool recipes) go in one "ESMValTool recipes" group after the notebooks, each with a
+    "Recipe" page instead of a notebook:
+
+      - ESMValTool recipes:
+          - <recipe>:
+              - Summary: pages/experiments/<ename>/<recipe>.md
+              - Recipe:  pages/experiments/<ename>/recipes/<recipe>.md
 
     Notebooks live in a notebooks/ subdirectory to avoid URL collision with the
     summary .md (the hide_pages hook strips 'pages/' from both, so same-stem
@@ -1014,30 +1140,43 @@ def update_mkdocs_nav(ename: str, ok_nbs: list[str], dry_run: bool = False) -> N
 
     exp_dir = f"pages/experiments/{ename}"
 
-    def _is_experiment_entry(item: dict) -> bool:
-        """True for old-style 'Evaluation figures' sections and per-notebook entries
-        whose paths belong to pages/experiments/ (from any previous run)."""
-        if "Evaluation figures" in item:
-            return True
-        for sub in item.values():
-            if isinstance(sub, list):
-                for child in sub:
-                    if isinstance(child, dict):
-                        for v in child.values():
-                            if isinstance(v, str) and "pages/experiments/" in v:
-                                return True
+    def _points_into_experiments(node) -> bool:
+        if isinstance(node, str):
+            return "pages/experiments/" in node
+        if isinstance(node, dict):
+            return any(_points_into_experiments(v) for v in node.values())
+        if isinstance(node, list):
+            return any(_points_into_experiments(v) for v in node)
         return False
+
+    def _is_experiment_entry(item: dict) -> bool:
+        """True for old-style 'Evaluation figures' sections, per-notebook entries and the recipes group,
+        i.e. anything whose paths belong to pages/experiments/ (from any previous run)."""
+        return "Evaluation figures" in item or _points_into_experiments(item)
 
     # Remove all stale experiment entries (old structure or previous runs).
     nav = [item for item in nav if not (isinstance(item, dict) and _is_experiment_entry(item))]
 
     # Append fresh entries in a stable, alphabetical order.
+    recipes = recipes or frozenset()
+    def _recipe_entry(nb: str) -> dict:
+        return {nb: [{"Summary": f"{exp_dir}/{nb}.md"}, {"Recipe": f"{exp_dir}/recipes/{nb}.md"}]}
+
+    recipe_groups = group_recipes_by_category([nb for nb in ok_nbs if nb in recipes], recipe_categories)
+    if recipe_categories:
+        recipe_entries = [{sub: [_recipe_entry(nb) for nb in rs]} for sub, rs in recipe_groups.items()]
+    else:
+        recipe_entries = [_recipe_entry(nb) for rs in recipe_groups.values() for nb in rs]
     for nb in sorted(ok_nbs, key=str.lower):
+        if nb in recipes:
+            continue
         nav.append({nb: [
             {"Summary":  f"{exp_dir}/{nb}.md"},
             {"Notebook": f"{exp_dir}/notebooks/{nb}.ipynb"},
         ]})
 
+    if recipe_entries:  # one group after the notebooks, like the landing-page section
+        nav.append({RECIPES_CATEGORY: recipe_entries})
     data["nav"] = nav
 
     if dry_run:
@@ -1197,6 +1336,7 @@ def main() -> None:
     print(f"[mkfigs] Running from commit {mkfigs_version}")
 
     ename, esmdir, notebooks = parse_mkfigs_sh()
+    recipes = parse_recipes_from_mkfigs_sh()
     if args.ename:
         ename = args.ename
 
@@ -1234,6 +1374,7 @@ def main() -> None:
             if p.name[: -len(suffix)] not in notebooks
         )
         notebooks = notebooks + extra
+        recipes = recipes + [r for r in recipe_stems_in(ofol) if r not in recipes]
 
     # -----------------------------------------------------------------------
     # Load previously committed URLs before notebook classification so we can
@@ -1267,7 +1408,10 @@ def main() -> None:
     # prefix of another's (e.g. "MLD" matching "MLD_max"'s PNGs too),
     # which can make a notebook look OK/FAILED based on the wrong PNGs.
     # Resolve ownership once, up front, against the full notebook list.
-    pngs_by_notebook = assign_pngs_to_notebooks(mdfol, notebooks) if mdfol.exists() else {}
+    # ESMValTool recipes (mkfigs.recipes) own PNGs by the same <stem>_NN.png rule, so they join the same pool.
+    pngs_by_notebook = assign_pngs_to_notebooks(mdfol, notebooks + recipes) if mdfol.exists() else {}
+    recipe_set: set[str] = set(recipes)
+    recipe_pages_dir = experiment_docs_dir / "recipes"
 
     for nb in notebooks:
         rendered = ofol / f"{nb}_rendered.ipynb"
@@ -1290,16 +1434,41 @@ def main() -> None:
             status = f"OK      ({n_png} PNG{'s' if n_png != 1 else ''})"
         print(f"  {status:<34}  {nb}")
 
+    # ESMValTool recipes: the run marker written by mkfigs.recipes stands in for <nb>_rendered.ipynb.
+    for rec in recipes:
+        info = read_marker(ofol, rec)
+        pngs = pngs_by_notebook.get(rec, [])
+        if info is None and (recipe_pages_dir / f"{rec}.md").exists():
+            prev_committed_nbs.append(rec)  # committed by an earlier render; nothing to restore for recipes
+            status = "PREV COMMITTED (recipe)"
+        elif info is None:
+            not_run_nbs.append(rec)
+            status = "NOT RUN (recipe)"
+        elif info.get("returncode") != 0 or not pngs:
+            failed_nbs.append(rec)
+            status = "FAILED  (recipe run failed or no PNGs)"
+        else:
+            ok_nbs.append(rec)
+            status = f"OK      ({len(pngs)} PNG{'s' if len(pngs) != 1 else ''}, recipe)"
+        print(f"  {status:<34}  {rec}")
+
     # Any previously committed notebooks absent from this run's notebook list.
     _seen = {*ok_nbs, *failed_nbs, *not_run_nbs, *prev_committed_nbs}
     for nb in existing_urls:
         if nb not in _seen:
             prev_committed_nbs.append(nb)
+    # ... and previously committed recipes (their pages are already in the docs tree).
+    if recipe_pages_dir.is_dir():
+        for page in sorted(recipe_pages_dir.glob("*.md")):
+            if page.stem not in _seen:
+                prev_committed_nbs.append(page.stem)
+                recipe_set.add(page.stem)
 
     print()
     notebook_issues = _load_notebook_issues(HERE)
     notebook_categories = _load_notebook_categories(HERE)
     categories_source = _load_categories_source(HERE)
+    recipe_categories = _load_recipe_categories(HERE)
     plain_summary, md_summary = build_run_summary(
         ename, esmdir, ok_nbs, failed_nbs, not_run_nbs, prev_committed_nbs, run_time,
         notebook_issues=notebook_issues,
@@ -1307,6 +1476,8 @@ def main() -> None:
         existing_run_times=existing_run_times,
         mkfigs_version=mkfigs_version,
         existing_run_versions=existing_run_versions,
+        recipes=recipe_set,
+        recipe_categories=recipe_categories,
     )
     print(plain_summary)
 
@@ -1331,7 +1502,7 @@ def main() -> None:
         token = resolve_figshare_token()
         if token:
             for nb in ok_nbs:
-                nb_url = upload_figshare_for_notebook(mdfol, ofol, ename, nb, token)
+                nb_url = upload_figshare_for_notebook(mdfol, ofol, ename, nb, token, is_recipe=nb in recipe_set)
                 if nb_url:
                     notebook_urls[nb] = nb_url
         else:
@@ -1382,6 +1553,8 @@ def main() -> None:
 
     # Rendered notebooks back into notebooks/ (outputs stripped here, after Figshare upload)
     for nb in ok_nbs:
+        if nb in recipe_set:
+            continue  # recipes have no notebook to copy back (their page is written below)
         src = ofol / f"{nb}_rendered.ipynb"
         dst = HERE / f"{nb}.ipynb"
         print(f"  {src.name}  ->  {dst.relative_to(REPO)}  (outputs stripped for git)")
@@ -1405,6 +1578,15 @@ def main() -> None:
             copied_mds.append(dst_md)
         else:
             print(f"  WARNING: {src_md} not found — skipping")
+
+    # ESMValTool recipe pages: embed the (resolved) recipe that produced each recipe's figures.
+    for nb in ok_nbs:
+        if nb not in recipe_set:
+            continue
+        dst_page = recipe_pages_dir / f"{nb}.md"
+        print(f"  {nb}_recipe_filled.yml  ->  {dst_page.relative_to(REPO)}")
+        if not args.dry_run:
+            write_recipe_page(ofol, nb, dst_page, ename)
 
     # Write notebooks_urls.json so .readthedocs.yaml can download notebooks
     # at build time (notebooks are too large to commit to git).
@@ -1441,7 +1623,8 @@ def main() -> None:
     # -----------------------------------------------------------------------
     # Update mkdocs.yml nav (+ ensure mkdocs-jupyter plugin present)
     # -----------------------------------------------------------------------
-    update_mkdocs_nav(ename=ename, ok_nbs=all_nav_nbs, dry_run=args.dry_run)
+    update_mkdocs_nav(ename=ename, ok_nbs=all_nav_nbs, dry_run=args.dry_run, recipes=recipe_set,
+                      recipe_categories=recipe_categories)
 
     # -----------------------------------------------------------------------
     # Next step: publish on Figshare, then get git commands

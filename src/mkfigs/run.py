@@ -27,6 +27,8 @@ import sys
 from pathlib import Path
 
 from . import get_mkfigs_version
+from . import recipes as recipes_mod
+from ._paths import find_repo_root
 
 
 def _extract_notebook_error(rendered_path: Path) -> str | None:
@@ -97,6 +99,16 @@ def parse_args() -> argparse.Namespace:
              "Default '' preserves the original access-om3-paper-1 layout, "
              "where notebooks sit directly in <wfolder>/notebooks/.",
     )
+    p.add_argument(
+        "--kind", choices=("notebooks", "recipes", "all"), default="notebooks",
+        help="What to run: the MKFIGS_NOTEBOOKS notebooks (default, the original behaviour), the "
+             "MKFIGS_RECIPES ESMValTool recipes, or both. Recipes usually need a different conda "
+             "environment from the notebooks, so they are normally run as a separate job.",
+    )
+    p.add_argument(
+        "--recipes-subdir", default="recipes",
+        help="Subdirectory of the notebooks directory holding the <recipe>.yml files (default 'recipes').",
+    )
     return p.parse_args()
 
 
@@ -166,14 +178,26 @@ def main() -> None:
     log.info("Log file              : %s", mdfol / "mkfigs_run.log")
     log.info("access-model-mkfigs   : %s", mkfigs_ver)
 
-    notebooks_env = os.environ.get("MKFIGS_NOTEBOOKS", "")
-    if not notebooks_env:
-        log.error("MKFIGS_NOTEBOOKS env var not set — run via mkfigs.sh")
-        sys.exit(1)
-    notebooks = [n for n in notebooks_env.split(":") if n]
+    notebooks: list[str] = []
+    if args.kind in ("notebooks", "all"):
+        notebooks_env = os.environ.get("MKFIGS_NOTEBOOKS", "")
+        if not notebooks_env:
+            log.error("MKFIGS_NOTEBOOKS env var not set — run via mkfigs.sh")
+            sys.exit(1)
+        notebooks = [n for n in notebooks_env.split(":") if n]
+
+    recipes: list[str] = []
+    if args.kind in ("recipes", "all"):
+        recipes_env = os.environ.get("MKFIGS_RECIPES", "")
+        if not recipes_env:
+            log.error("MKFIGS_RECIPES env var not set — run via mkfigs.sh")
+            sys.exit(1)
+        recipes = [r for r in recipes_env.split(":") if r]
 
     succeeded: list[str] = []
     failed:    list[str] = []
+    succeeded_recipes: list[str] = []
+    failed_recipes:    list[str] = []
 
     log.info("")
     log.info("Running %d notebooks ...", len(notebooks))
@@ -187,6 +211,34 @@ def main() -> None:
         else:
             failed.append(nb)
             log.error("FAILED %s", nb)
+
+    if recipes:
+        log.info("")
+        log.info("Running %d ESMValTool recipes ...", len(recipes))
+        log.info("")
+    for rec in recipes:
+        log.info("START  recipe %s", rec)
+        ok = recipes_mod.run_recipe(
+            rec, ofol, notebooks_dir / args.recipes_subdir,
+            experiment=ename,
+            repo_root=find_repo_root(notebooks_dir),
+            input_root=os.environ.get("MKFIGS_MOPPY_INPUT_ROOT", ""),
+            cache_dir=os.environ.get("MKFIGS_MOPPY_CACHE", ""),
+            esmvaltool_args=os.environ.get("MKFIGS_ESMVALTOOL_ARGS", ""),
+            model_id=os.environ.get("MKFIGS_MOPPY_MODEL_ID", ""),
+            # Newline- or ';'-separated COMPOUND_NAME:GLOB entries (globs contain ':'-free paths, so ':' can't separate).
+            patterns=[p.strip() for p in re.split(r"[;\n]", os.environ.get("MKFIGS_MOPPY_PATTERNS", "")) if p.strip()],
+            moppy_args=recipes_mod.moppy_args_from_env(),
+            base_config_dir=os.environ.get("MKFIGS_ESMVALTOOL_CONFIG_DIR", ""),
+            presets=recipes_mod.presets_from_env(),
+            timeout=recipes_mod.timeout_from_env(),
+        )
+        if ok:
+            succeeded_recipes.append(rec)
+            log.info("OK     recipe %s", rec)
+        else:
+            failed_recipes.append(rec)
+            log.error("FAILED recipe %s", rec)
 
     log.info("")
     log.info("=" * 56)
@@ -211,6 +263,20 @@ def main() -> None:
                 ef.write(error + "\n" if error else "(no error output found in rendered notebook)\n")
                 ef.write("\n")
         log.error("Error details: %s", errors_log)
+
+    if succeeded_recipes:
+        log.info("Succeeded recipes (%d): %s", len(succeeded_recipes), ", ".join(succeeded_recipes))
+    if failed_recipes:
+        log.error("FAILED    recipes (%d): %s", len(failed_recipes), ", ".join(failed_recipes))
+        # A separate file, so a recipes job never overwrites the notebooks job's mkfigs_errors.log.
+        recipe_errors_log = mdfol / "mkfigs_recipe_errors.log"
+        with open(recipe_errors_log, "w") as ef:
+            for rec in failed_recipes:
+                ef.write(f"{'=' * 56}\nFAILED recipe: {rec}\n{'=' * 56}\n")
+                error = recipes_mod.extract_recipe_error(ofol, rec)
+                ef.write(error + "\n" if error else "(no run marker found)\n")
+                ef.write("\n")
+        log.error("Error details: %s", recipe_errors_log)
 
     _print_next_steps(Path(args.wfolder), notebooks_dir)
 
