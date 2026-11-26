@@ -98,7 +98,7 @@ def test_main_writes_error_log_for_failed_notebooks(tmp_path, monkeypatch):
         ["mkfigs-run", "--ename", "exp1", "--esmdir", "/fake/esm.json", "--wfolder", str(wfolder)],
     )
 
-    def fake_run_notebook(nb, esmdir, ofol, nbdir):
+    def fake_run_notebook(nb, esmdir, ofol, nbdir, repo_root=None):
         # simulate SST succeeding (and actually producing a rendered file
         # so _extract_notebook_error has something to look at) and MLD failing
         if nb == "SST":

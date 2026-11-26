@@ -41,11 +41,16 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, date, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
 from . import get_mkfigs_version
+from ._sources import (
+    cff_author_names, check_unique_stems, describe_source, is_external, notebook_path,
+    notebook_stem, read_sources, rewrite_page_header, source_link_md,
+)
+from ._sources import authors_md as cff_authors_md  # update_top_index has an `authors_md` argument
 from .configdoc import figshare_upload_and_rewrite, assign_pngs_to_notebooks, FigshareUploader, _md5
 from .configdoc import get_docs_url, get_model_name, get_repo_slug, get_repo_url
 from ._paths import find_notebooks_dir, find_repo_root
@@ -125,15 +130,34 @@ def parse_mkfigs_sh() -> tuple[str, str, list[str]]:
     if not esmdir:
         sys.exit("ERROR: could not find an uncommented ESMDIR= line in mkfigs.sh")
 
-    arr_match = re.search(r'\barray=\(\s*(.*?)\s*\)', text, re.DOTALL)
-    notebooks: list[str] = []
-    if arr_match:
-        for raw in arr_match.group(1).splitlines():
+    def _array_items(body: str) -> list[str]:
+        items = []
+        for raw in body.splitlines():
             # Strip inline '# comment' text too (e.g. "SeaIce_Vol  #needs 26.07"),
             # matching how bash itself treats '#' after whitespace in the array.
             stripped = raw.split("#", 1)[0].strip()
             if stripped:
-                notebooks.append(stripped)
+                items.append(stripped)
+        return items
+
+    # Find the arrays in the script with its comments removed, as bash reads it: a ')' in a
+    # comment (e.g. "# Foo   # needs X (not in this run)") must not end the array early.
+    code = "\n".join(re.sub(r"(^|\s)#.*", r"\1", line) for line in text.splitlines())
+    arr_match = re.search(r'\barray=\(\s*(.*?)\s*\)', code, re.DOTALL)
+    notebooks: list[str] = []
+    if arr_match:
+        notebooks += _array_items(arr_match.group(1))
+
+    # Notebooks from another repo (e.g. a git submodule): a `<name>_array=(...)` of
+    # notebook names, with `<name>_dir=<path from the repo root>` saying where they
+    # live. mkfigs.sh passes them on as <dir>/<notebook>; see _sources.py.
+    for m in re.finditer(r'^[ \t]*(\w+)_array=\(\s*(.*?)\s*\)', code, re.DOTALL | re.MULTILINE):
+        prefix = m.group(1)
+        dirs = re.findall(rf'^[ \t]*{prefix}_dir=([^\s#]+)', code, re.MULTILINE)
+        if not dirs:
+            sys.exit(f"ERROR: mkfigs.sh has {prefix}_array but no {prefix}_dir= line saying where its notebooks are")
+        nb_dir = dirs[-1].strip("\"'").rstrip("/")
+        notebooks += [f"{nb_dir}/{nb}" for nb in _array_items(m.group(2))]
 
     # mkfigs.sh templates sometimes write ESMDIR=.../${ENAME}/datastore.json so a
     # new experiment block can be added by just uncommenting an ENAME= line above
@@ -175,31 +199,7 @@ def load_model_identity_from_mkfigs_sh() -> None:
 # ---------------------------------------------------------------------------
 def get_authors_md() -> str:
     """Return a markdown attribution string from CITATION.cff, or ''."""
-    cff = REPO / "CITATION.cff"
-    try:
-        lines = cff.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return ""
-
-    given = None
-    family = None
-    coauthors = []
-    for line in lines:
-        line = line.strip()
-        if "given-names:" in line:
-            given = line.split(":", 1)[1].strip().strip('"')
-        elif line.startswith("family-names:"):
-            family = line.split(":", 1)[1].strip().strip('"')
-        if given and family:
-            coauthors.append(f"{family}, {given}")
-            given = None
-            family = None
-
-    if not coauthors:
-        return ""
-    names = "; ".join(sorted(coauthors))
-    # Avoid "Rashid, Harun A.." when the last name ends in an initial.
-    return "**authors (alphabetically):** " + names + ("" if names.endswith(".") else ".")
+    return cff_authors_md(cff_author_names(REPO / "CITATION.cff"))
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +303,19 @@ def build_run_summary(
     mkfigs_version: str = "unknown",
     existing_run_versions: dict[str, str] | None = None,
     categories: dict[str, list[int | str]] | None = None,
+    source_cells: dict[str, str] | None = None,
+    sources_note: str = "",
+    source_header: str = "Source",
 ) -> tuple[str, str]:
     """Return (plain_text_summary, markdown_summary).
 
     ``notebook_issues`` maps notebook stem to a Markdown GitHub issue string,
     loaded from mkfigs_issues.py in the paper repo's notebooks/ directory.
+
+    ``source_cells`` (optional) maps notebook stem to a Markdown "Source" cell;
+    when given, the tables get a Source column and ``sources_note`` is shown
+    above them. pushit only passes it when some notebooks come from another
+    repo (e.g. access-om3-paper-1 run inside access-cm3-paper-1).
 
     ``categories`` (optional, CATEGORIES in mkfigs_issues.py) splits the
     notebook table into one sub-headed table per category, with a "Jump to"
@@ -356,6 +364,17 @@ def build_run_summary(
         all_nbs = sorted(all_nbs, key=str.lower)
 
     def _table(nbs: list[str]) -> str:
+        if source_cells:
+            return (
+                f"| Notebook | {STATUS_HEADER} | {source_header} | GitHub Issue(s) | Links |\n"
+                "|---|---|---|---|---|\n"
+                + "\n".join(
+                    f"| `{nb}` | {_status[nb][0]} | {source_cells.get(nb, '')} "
+                    f"| {notebook_issues.get(nb, '')} | {_status[nb][1]} |"
+                    for nb in nbs
+                )
+                + "\n"
+            )
         return (
             f"| Notebook | {STATUS_HEADER} | GitHub Issue(s) | Links |\n"
             "|---|---|---|---|\n"
@@ -378,6 +397,8 @@ def build_run_summary(
         )
     else:
         tables_md = _table(all_nbs)
+    if source_cells and sources_note:
+        tables_md = f"{sources_note}\n\n{tables_md}"
 
     # Build per-notebook (date, version) lookup then group into table rows.
     _nb_times: dict[str, str] = {nb: ts for nb in ok_nbs}
@@ -567,6 +588,101 @@ def render_branch(ename: str) -> str:
     return f"{RENDER_BRANCH_PREFIX}{ename}"
 
 
+def load_sources(mdfol: Path, urls_json: Path) -> dict[str, dict[str, str]]:
+    """Where each notebook came from: `_sources` saved in notebooks_urls.json, updated by this run's mkmd/sources/."""
+    saved: dict[str, dict[str, str]] = {}
+    if urls_json.exists():
+        try:
+            saved = json.loads(urls_json.read_text()).get("_sources", {})
+        except Exception:
+            pass
+    return {**saved, **read_sources(mdfol)}
+
+
+def as_run_path(nb: str, sources: dict[str, dict[str, str]]) -> Path:
+    """Where pushit puts a notebook as it was run (outputs stripped), for the render commit.
+
+    A notebook of this repo goes back over its own file, as before. A notebook
+    from another repo (a submodule, see _sources.py) must not be written into
+    that repo, so it goes to <mkfigs.sh dir>/<its repo name>/<nb>.ipynb, e.g.
+    notebooks/polished-python/access-om3-paper-1/SST.ipynb.
+    """
+    info = sources.get(nb)
+    if info:
+        return HERE / (info.get("repo") or "external") / f"{nb}.ipynb"
+    return HERE / f"{nb}.ipynb"
+
+
+def build_source_cells(
+    ename: str, notebooks: list[str], sources: dict[str, dict[str, str]], linked: set[str],
+) -> dict[str, str]:
+    """Landing-page "Source" cell per notebook, or {} when every notebook is this repo's own.
+
+    This repo's notebooks show the repo name; others show their repo @ the commit
+    that ran, linked to that notebook upstream. Notebooks in *linked* (those with
+    a render to commit) also link to their as-run copy on the eval-<ENAME> branch.
+    """
+    if not any(nb in sources for nb in notebooks):
+        return {}
+    repo_url = get_repo_url()
+    own = f"`{repo_url.rstrip('/').rsplit('/', 1)[-1]}`"
+    cells = {}
+    for nb in notebooks:
+        as_run = f"{repo_url}/blob/{render_branch(ename)}/{as_run_path(nb, sources).relative_to(REPO)}"
+        if nb in sources:
+            cell = source_link_md(sources[nb])
+            if nb in linked:
+                cell += f"&nbsp;·&nbsp;[as&nbsp;run]({as_run})"
+        else:
+            cell = f"{own}: [as&nbsp;run]({as_run})" if nb in linked else own
+        cells[nb] = cell
+    return cells
+
+
+def sources_note(sources: dict[str, dict[str, str]]) -> str:
+    """One line above the run-summary tables explaining the Source column."""
+    repos = sorted({info.get("repo") or "external" for info in sources.values()})
+    names = ", ".join(f"`{r}`" for r in repos)
+    return (
+        f"**Source:** notebooks from {names} are run from a git submodule of this repository"
+        " against this experiment; the first link is the notebook upstream at the commit that ran,"
+        " *as run* is the copy (outputs stripped) committed with this render."
+        " Other notebooks are this repository's own."
+    )
+
+
+def source_header(sources: dict[str, dict[str, str]]) -> str:
+    """Landing-page Source column heading, e.g. 'Source (access-om3-paper-1: upstream · as run)'."""
+    return "Source (repo: @commit&nbsp;·&nbsp;as&nbsp;run)"
+
+
+def as_run_url(ename: str, nb: str, sources: dict[str, dict[str, str]]) -> str:
+    """GitHub link to a notebook's as-run copy on the eval-<ENAME> branch."""
+    return f"{get_repo_url()}/blob/{render_branch(ename)}/{as_run_path(nb, sources).relative_to(REPO)}"
+
+
+def sources_preamble(ename: str, sources: dict[str, dict[str, str]]) -> str:
+    """Landing-page intro sentences on notebooks run from submodules ('' if none)."""
+    if not sources:
+        return ""
+    repo_url = get_repo_url()
+    own = repo_url.rstrip("/").rsplit("/", 1)[-1]
+    by_repo: dict[str, dict[str, str]] = {}
+    for info in sources.values():
+        by_repo.setdefault(info.get("repo") or "external", info)
+    branch = render_branch(ename)
+    parts = []
+    for repo, info in sorted(by_repo.items()):
+        where = f" (`{info['submodule']}`)" if info.get("submodule") else ""
+        as_run_dir = as_run_path("x", {"x": info}).parent.relative_to(REPO)
+        parts.append(
+            f"`{repo}` is a git submodule of `{own}`{where}; the {repo} notebooks exactly as run"
+            f" for **{ename}** (outputs stripped) are committed on the"
+            f" [`{branch}`]({repo_url}/tree/{branch}/{as_run_dir}) branch in `{as_run_dir}/`."
+        )
+    return " ".join(parts)
+
+
 def _branch_exists(branch: str) -> bool:
     """True if ``branch`` exists locally or on origin."""
     return bool(
@@ -637,7 +753,9 @@ def check_figshare_upload_mode(ename: str) -> None:
 
     # Reconstruct the git commands.
     _, esmdir, notebooks = parse_mkfigs_sh()
+    notebooks = [notebook_stem(nb) for nb in notebooks]
     ofol = HERE / f"mkfigs_output_{ename}"
+    sources = load_sources(ofol / "mkmd", urls_json)
     ok_nbs = [
         nb for nb in notebooks
         if (ofol / f"{nb}_rendered.ipynb").exists()
@@ -673,8 +791,9 @@ def check_figshare_upload_mode(ename: str) -> None:
     tag_msg  = f"Evaluation figures for {ename}. Rendered site (after RTD builds tag): {rtd_url}"
 
     # Relative to REPO: notebooks/<nb>.ipynb for access-om3-paper-1,
-    # notebooks/polished-python/<nb>.ipynb for access-cm3-paper-1.
-    added_files = [str((HERE / f"{nb}.ipynb").relative_to(REPO)) for nb in ok_nbs]
+    # notebooks/polished-python/<nb>.ipynb for access-cm3-paper-1, and
+    # notebooks/polished-python/<repo>/<nb>.ipynb for a submodule's notebook.
+    added_files = [str(as_run_path(nb, sources).relative_to(REPO)) for nb in ok_nbs]
     added_files += [
         str((experiment_docs_dir / f"{nb}.md").relative_to(REPO))
         for nb in ok_nbs
@@ -1070,6 +1189,7 @@ def update_top_index(
     dry_run: bool = False,
     categorised: bool = False,
     categories_source: str | None = None,
+    sources: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """Append or replace an experiment block in the top-level pages/index.md.
 
@@ -1115,15 +1235,35 @@ def update_top_index(
     model = get_model_name()
     repo_url = get_repo_url()
     repo_name = repo_url.rsplit("/", 1)[-1]
+    # Notebooks run from submodules (e.g. access-om3-paper-1 in access-cm3-paper-1) are named too.
+    other_repos = {}
+    for info in (sources or {}).values():
+        other_repos.setdefault(info.get("repo") or "external", info.get("url") or "")
+    also = "".join(
+        f" and the\n[{r}]({u}/)" if u else f" and the {r}" for r, u in sorted(other_repos.items())
+    )
+    submodule_md = sources_preamble(ename, sources or {})
+    # CITATION.cff authors of each submodule repo, below this repo's.
+    other_authors = []
+    for info in sorted((sources or {}).values(), key=lambda i: i.get("repo") or ""):
+        names = info.get("cff_authors") or (
+            cff_author_names(REPO / info["submodule"] / "CITATION.cff") if info.get("submodule") else [])
+        slug = "/".join((info.get("url") or "").rstrip("/").split("/")[-2:])
+        line = f"`{slug}/` {cff_authors_md(names)}\n\n" if names and slug else ""
+        if line and line not in other_authors:
+            other_authors.append(line)
     preamble = (
         f"# {model} Evaluation Figures: {ename}\n\n"
         f"Diagnostic figures from {model} experiments, generated by the\n"
-        f"[{repo_name}]({repo_url}/)\n"
-        f"analysis notebooks for **{ename}**. {browse}"
+        f"[{repo_name}]({repo_url}/){also}\n"
+        f"analysis notebooks for **{ename}**. "
+        + (f"{submodule_md} " if submodule_md else "")
+        + f"{browse}"
         " The website is intended to help users discover and"
         " compare diagnostics. All discussion of the diagnostics occurs on GitHub issues"
         " (see links in run summary table below and figure captions).\n\n"
         + (f"`{get_repo_slug()}/` {authors_md}\n\n" if authors_md else "")
+        + "".join(other_authors)
         + extra
         + anchor + "\n"
     )
@@ -1196,9 +1336,16 @@ def main() -> None:
     mkfigs_version = get_mkfigs_version()
     print(f"[mkfigs] Running from commit {mkfigs_version}")
 
-    ename, esmdir, notebooks = parse_mkfigs_sh()
+    ename, esmdir, entries = parse_mkfigs_sh()
     if args.ename:
         ename = args.ename
+    try:
+        check_unique_stems(entries)
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+    # Everything below works with notebook stems; entries may be submodule paths (see _sources.py).
+    notebooks = [notebook_stem(e) for e in entries]
+    local_entries = {e for e in entries if e == notebook_stem(e)}
 
     if args.check_figshare_upload:
         check_figshare_upload_mode(ename)
@@ -1300,6 +1447,23 @@ def main() -> None:
     notebook_issues = _load_notebook_issues(HERE)
     notebook_categories = _load_notebook_categories(HERE)
     categories_source = _load_categories_source(HERE)
+    # Notebooks from a submodule: where they came from (repo, commit, path), and
+    # where their as-run copy goes. A notebook now listed as this repo's own is not.
+    sources = {nb: s for nb, s in load_sources(mdfol, urls_json_path).items() if nb not in local_entries}
+    _all_listed = ok_nbs + prev_committed_nbs + failed_nbs + not_run_nbs
+    # Submodule notebooks with no record yet (not run): describe them from the
+    # submodule as it is now, for the Source column only (not saved in _sources).
+    shown_sources = dict(sources)
+    for e in entries:
+        if is_external(e) and notebook_stem(e) not in shown_sources:
+            info = describe_source(notebook_path(e, HERE, REPO))
+            if not info.get("repo"):  # no git checkout here (e.g. mkfigs-preview's copy): guess from the path
+                parent = PurePosixPath(e).parent
+                info["repo"] = (parent.parent if parent.name == "notebooks" else parent).name
+            shown_sources[notebook_stem(e)] = info
+    source_cells = build_source_cells(
+        ename, _all_listed, shown_sources, linked={*ok_nbs, *prev_committed_nbs} - set(failed_nbs),
+    )
     plain_summary, md_summary = build_run_summary(
         ename, esmdir, ok_nbs, failed_nbs, not_run_nbs, prev_committed_nbs, run_time,
         notebook_issues=notebook_issues,
@@ -1307,6 +1471,9 @@ def main() -> None:
         existing_run_times=existing_run_times,
         mkfigs_version=mkfigs_version,
         existing_run_versions=existing_run_versions,
+        source_cells=source_cells,
+        sources_note=sources_note(sources) if source_cells else "",
+        source_header=source_header(shown_sources) if source_cells else "Source",
     )
     print(plain_summary)
 
@@ -1367,6 +1534,8 @@ def main() -> None:
     _merged_run_versions = {**existing_run_versions, **{nb: mkfigs_version for nb in ok_nbs}}
     if _merged_run_versions:
         all_notebook_urls["_run_versions"] = _merged_run_versions
+    if sources:
+        all_notebook_urls["_sources"] = sources
     # Nav includes all notebooks with valid URLs, except those that failed this run.
     failed_set = set(failed_nbs)
     all_nav_nbs = ok_nbs + [nb for nb in prev_committed_nbs if nb not in failed_set]
@@ -1380,12 +1549,14 @@ def main() -> None:
     else:
         print("Copying files:")
 
-    # Rendered notebooks back into notebooks/ (outputs stripped here, after Figshare upload)
+    # Rendered notebooks back into notebooks/ (outputs stripped here, after Figshare upload).
+    # A submodule's notebook goes to <repo name>/<nb>.ipynb instead (as_run_path).
     for nb in ok_nbs:
         src = ofol / f"{nb}_rendered.ipynb"
-        dst = HERE / f"{nb}.ipynb"
+        dst = as_run_path(nb, sources)
         print(f"  {src.name}  ->  {dst.relative_to(REPO)}  (outputs stripped for git)")
         if not args.dry_run:
+            dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
             subprocess.run(
                 ["jupyter", "nbconvert", "--clear-output", "--to", "notebook", "--inplace", str(dst)],
@@ -1402,6 +1573,8 @@ def main() -> None:
             if not args.dry_run:
                 dst_md.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_md, dst_md)
+                if nb in sources:
+                    rewrite_page_header(dst_md, sources[nb], as_run_url(ename, nb, sources))
             copied_mds.append(dst_md)
         else:
             print(f"  WARNING: {src_md} not found — skipping")
@@ -1436,6 +1609,7 @@ def main() -> None:
         dry_run=args.dry_run,
         categorised=bool(notebook_categories),
         categories_source=categories_source,
+        sources=shown_sources,
     )
 
     # -----------------------------------------------------------------------

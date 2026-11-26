@@ -313,6 +313,32 @@ these `export` lines from `mkfigs.sh` on the login node, so there is nothing ext
 every run. To keep hand-written text there, such as a list of tracking issues, wrap it in
 `<!-- preamble-extra -->` ... `<!-- /preamble-extra -->` above the `<!-- experiments -->` anchor.
 
+### Notebooks from another repo (git submodule)
+
+A paper repo can also run another repo's notebooks against its own experiment, e.g.
+`access-cm3-paper-1` runs `access-om3-paper-1`'s ocean notebooks, included as a git submodule at
+`external/access-om3-paper-1`. In `mkfigs.sh`, next to the usual `array`:
+
+```bash
+om3_dir=external/access-om3-paper-1/notebooks   # from the repo root
+om3_array=(
+    SST
+)
+printf -v _all_notebooks '%s:' "${array[@]}" "${om3_array[@]/#/${om3_dir}/}"
+MKFIGS_NOTEBOOKS="${MKFIGS_NOTEBOOKS:-${_all_notebooks%:}}"
+```
+
+Any `<name>_array` with a matching `<name>_dir` works. Clone with `--recurse-submodules` (the
+submodule's own `external/access-model-mkfigs` is needed by its notebooks). Then:
+
+- each such notebook runs from its own directory (so it imports the helpers next to it) and its outputs go to the
+  usual `mkfigs_output_<ENAME>/` under its name, so names must be unique across all the arrays;
+- `pushit` never writes into the submodule: the notebook as run (outputs stripped) goes to
+  `<mkfigs.sh dir>/<repo>/<name>.ipynb`, e.g. `notebooks/polished-python/access-om3-paper-1/SST.ipynb`, and is in the
+  printed `git add` for the `eval-<ENAME>` commit;
+- the landing page gets a **Source** column: the upstream notebook at the commit that ran, and the as-run copy. Repos
+  without such notebooks (e.g. `access-om3-paper-1` itself) get exactly the same page as before.
+
 ## Testing
 
 ```bash

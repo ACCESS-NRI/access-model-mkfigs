@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 from ._paths import find_notebooks_dir
+from ._sources import check_unique_stems, notebook_stem
 
 # Resources for the summary job: it only reads the per-notebook status files.
 SUMMARY_RESOURCES = "ncpus=1,mem=4GB,jobfs=1GB,walltime=00:15:00"
@@ -97,10 +98,17 @@ def main(argv: list[str] | None = None) -> None:
     from .pushit import parse_mkfigs_sh  # the same reading of mkfigs.sh that pushit uses
     ename, _esmdir, array = parse_mkfigs_sh()
 
-    notebooks = args.notebooks or array
-    unknown = [nb for nb in notebooks if nb not in array]
+    try:
+        check_unique_stems(array)
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+    # Entries may be paths to a submodule's notebooks (see _sources.py); on the command
+    # line, and in job names and status files, a notebook is known by its stem.
+    by_stem = {notebook_stem(e): e for e in array}
+    unknown = [nb for nb in args.notebooks if nb not in by_stem and nb not in array]
     if unknown:
         sys.exit(f"ERROR: not in the mkfigs.sh array: {' '.join(unknown)}")
+    notebooks = [by_stem.get(nb, nb) for nb in args.notebooks] or array
     if not notebooks:
         sys.exit("ERROR: no notebooks to run")
 
@@ -108,13 +116,14 @@ def main(argv: list[str] | None = None) -> None:
     status_dir = here / f"mkfigs_output_{ename}" / "mkmd" / "status"
     if not args.dry_run:
         for nb in notebooks:
-            (status_dir / f"{nb}.txt").unlink(missing_ok=True)
+            (status_dir / f"{notebook_stem(nb)}.txt").unlink(missing_ok=True)
 
     print(f"Experiment {ename}: {len(notebooks)} notebook job(s) + 1 summary job")
     proj = project_args(sh)
     ids = []
     for nb in notebooks:
-        ids.append(qsub([*proj, "-N", job_name(nb), "-m", "n", "-v", f"MKFIGS_NOTEBOOKS={nb},MKFIGS_SKIP_REPORT=1",
+        ids.append(qsub([*proj, "-N", job_name(notebook_stem(nb)), "-m", "n",
+                         "-v", f"MKFIGS_NOTEBOOKS={nb},MKFIGS_SKIP_REPORT=1",
                          "mkfigs.sh"], args.dry_run, here))
     summary = qsub([*proj, "-N", "mk_summary", "-l", SUMMARY_RESOURCES,
                     "-W", "depend=afterany:" + ":".join(ids),

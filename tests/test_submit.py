@@ -135,7 +135,7 @@ def _run_main(tmp_path, monkeypatch, notebooks, fake_results, **env):
                                      "--wfolder", str(wfolder)])
     ran = []
 
-    def fake_run_notebook(nb, esmdir, ofol, nbdir):
+    def fake_run_notebook(nb, esmdir, ofol, nbdir, repo_root=None):
         ran.append(nb)
         if not fake_results[nb]:
             (ofol / f"{nb}_rendered.ipynb").write_text(json.dumps({"cells": [{"outputs": [

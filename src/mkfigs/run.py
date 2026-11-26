@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 from . import get_mkfigs_version
+from ._sources import check_unique_stems, is_external, notebook_path, notebook_stem, write_source
 
 
 def _extract_notebook_error(rendered_path: Path) -> str | None:
@@ -114,9 +115,18 @@ def setup_logging(log_file: Path) -> logging.Logger:
     return logging.getLogger(__name__)
 
 
-def run_notebook(nb: str, esmdir: str, ofol: Path, notebooks_dir: Path) -> bool:
-    """Strip outputs, run via papermill, convert to markdown. Returns True on success."""
-    nb_path = notebooks_dir / f"{nb}.ipynb"
+def run_notebook(
+    nb: str, esmdir: str, ofol: Path, notebooks_dir: Path, repo_root: Path | None = None,
+) -> bool:
+    """Strip outputs, run via papermill, convert to markdown. Returns True on success.
+
+    *nb* is an mkfigs.sh entry: a notebook name in *notebooks_dir*, or a path from
+    *repo_root* such as external/access-om3-paper-1/notebooks/SST (see _sources.py).
+    The notebook runs from its own directory (so it can import the helpers next to
+    it) and its outputs are named after its stem.
+    """
+    nb_path = notebook_path(nb, notebooks_dir, repo_root or notebooks_dir.parent)
+    nb = notebook_stem(nb)
     fixed_path = _fix_kernel(nb_path)
 
     try:
@@ -129,7 +139,7 @@ def run_notebook(nb: str, esmdir: str, ofol: Path, notebooks_dir: Path) -> bool:
                 "-p", "cwd", str(ofol) + "/",
                 "-p", "nbname", f"{nb}.ipynb",
             ],
-            cwd=str(notebooks_dir),
+            cwd=str(nb_path.parent),
         )
     finally:
         fixed_path.unlink(missing_ok=True)
@@ -170,7 +180,15 @@ def main() -> None:
     if not notebooks_env:
         log.error("MKFIGS_NOTEBOOKS env var not set — run via mkfigs.sh")
         sys.exit(1)
-    notebooks = [n for n in notebooks_env.split(":") if n]
+    entries = [n for n in notebooks_env.split(":") if n]
+    try:
+        check_unique_stems(entries)
+    except ValueError as exc:
+        log.error("%s", exc)
+        sys.exit(1)
+    repo_root = Path(args.wfolder)
+    # Outputs, status files and the report all use the notebook's stem.
+    notebooks = [notebook_stem(e) for e in entries]
 
     # mkfigs.submit runs each notebook in its own job (MKFIGS_SKIP_REPORT=1) and then a
     # summary job (MKFIGS_REPORT_ONLY=1) that reports on all of them, using the status
@@ -179,9 +197,13 @@ def main() -> None:
         log.info("")
         log.info("Running %d notebooks ...", len(notebooks))
         log.info("")
-        for nb in notebooks:
-            log.info("START  %s", nb)
-            ok = run_notebook(nb, esmdir, ofol, notebooks_dir)
+        for entry, nb in zip(entries, notebooks):
+            log.info("START  %s", entry)
+            if is_external(entry):  # record where it came from, for the landing page
+                write_source(mdfol, entry, notebook_path(entry, notebooks_dir, repo_root))
+            else:
+                (mdfol / "sources" / f"{nb}.json").unlink(missing_ok=True)
+            ok = run_notebook(entry, esmdir, ofol, notebooks_dir, repo_root)
             _write_status(mdfol, nb, ok)
             if ok:
                 log.info("OK     %s", nb)
