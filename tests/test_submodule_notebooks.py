@@ -145,6 +145,20 @@ def test_parse_mkfigs_sh_reads_submodule_array(tmp_path, monkeypatch):
     assert notebooks == ["TOA_CRE", f"{OM3_DIR}/SST"]
 
 
+def test_parse_mkfigs_sh_ignores_brackets_in_comments(tmp_path, monkeypatch):
+    """A ')' in a comment inside an array must not end it early (bash ignores it)."""
+    (tmp_path / "mkfigs.sh").write_text(
+        "ENAME=e\nESMDIR=/x\n"
+        "# array=(Old)   a commented-out line (with brackets)\n"
+        "array=(\n    A\n    # B   # not on CM3 (no output)\n    C   # keep (yes)\n)\n"
+        "om3_dir=external/om3/notebooks   # (path)\n"
+        "om3_array=(\n    # D   # not expected to work (no ocean.stats)\n    SST\n    SSH\n)\n"
+    )
+    monkeypatch.setattr(pushit, "HERE", tmp_path)
+    _, _, notebooks = pushit.parse_mkfigs_sh()
+    assert notebooks == ["A", "C", "external/om3/notebooks/SST", "external/om3/notebooks/SSH"]
+
+
 def test_parse_mkfigs_sh_needs_the_dir(tmp_path, monkeypatch):
     (tmp_path / "mkfigs.sh").write_text("ENAME=e\nESMDIR=/x\narray=(\n A\n)\nom3_array=(\n SST\n)\n")
     monkeypatch.setattr(pushit, "HERE", tmp_path)

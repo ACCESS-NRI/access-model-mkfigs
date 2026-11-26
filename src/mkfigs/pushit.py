@@ -140,7 +140,10 @@ def parse_mkfigs_sh() -> tuple[str, str, list[str]]:
                 items.append(stripped)
         return items
 
-    arr_match = re.search(r'\barray=\(\s*(.*?)\s*\)', text, re.DOTALL)
+    # Find the arrays in the script with its comments removed, as bash reads it: a ')' in a
+    # comment (e.g. "# Foo   # needs X (not in this run)") must not end the array early.
+    code = "\n".join(re.sub(r"(^|\s)#.*", r"\1", line) for line in text.splitlines())
+    arr_match = re.search(r'\barray=\(\s*(.*?)\s*\)', code, re.DOTALL)
     notebooks: list[str] = []
     if arr_match:
         notebooks += _array_items(arr_match.group(1))
@@ -148,9 +151,9 @@ def parse_mkfigs_sh() -> tuple[str, str, list[str]]:
     # Notebooks from another repo (e.g. a git submodule): a `<name>_array=(...)` of
     # notebook names, with `<name>_dir=<path from the repo root>` saying where they
     # live. mkfigs.sh passes them on as <dir>/<notebook>; see _sources.py.
-    for m in re.finditer(r'^[ \t]*(\w+)_array=\(\s*(.*?)\s*\)', text, re.DOTALL | re.MULTILINE):
+    for m in re.finditer(r'^[ \t]*(\w+)_array=\(\s*(.*?)\s*\)', code, re.DOTALL | re.MULTILINE):
         prefix = m.group(1)
-        dirs = re.findall(rf'^[ \t]*{prefix}_dir=([^\s#]+)', text, re.MULTILINE)
+        dirs = re.findall(rf'^[ \t]*{prefix}_dir=([^\s#]+)', code, re.MULTILINE)
         if not dirs:
             sys.exit(f"ERROR: mkfigs.sh has {prefix}_array but no {prefix}_dir= line saying where its notebooks are")
         nb_dir = dirs[-1].strip("\"'").rstrip("/")
