@@ -50,6 +50,7 @@ dev = [
 
 [project.scripts]
 mkfigs-run     = "mkfigs.run:main"
+mkfigs-submit  = "mkfigs.submit:main"
 mkfigs-pushit  = "mkfigs.pushit:main"
 mkfigs-restore = "mkfigs.restore:main"
 mkfigs-preview = "mkfigs.preview:main"

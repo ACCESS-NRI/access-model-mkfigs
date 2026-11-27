@@ -8,6 +8,9 @@ from __future__ import annotations
 from pathlib import Path
 
 
+SUBMISSION_LOCK = ".mkfigs-submit.lock"
+
+
 def find_notebooks_dir() -> Path:
     """Return the nearest directory at or above CWD containing mkfigs.sh (else CWD).
 
