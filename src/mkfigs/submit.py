@@ -41,7 +41,11 @@ SUMMARY_RESOURCES = "ncpus=1,mem=4GB,jobfs=1GB,walltime=00:15:00"
 def check_mkfigs_sh(sh: Path) -> None:
     """Refuse to submit if mkfigs.sh would overwrite MKFIGS_NOTEBOOKS (every job would run everything)."""
     text = sh.read_text()
-    if not re.search(r"MKFIGS_NOTEBOOKS[:=]?-", text):
+    if not re.search(
+        r'^[ \t]*(?:export[ \t]+)?MKFIGS_NOTEBOOKS="?\$\{MKFIGS_NOTEBOOKS:?-',
+        text,
+        re.MULTILINE,
+    ):
         sys.exit(
             f"ERROR: {sh} always sets MKFIGS_NOTEBOOKS from its array, so every job would run every\n"
             "notebook. Change it to keep a value passed in by qsub -v, e.g.\n\n"
@@ -97,12 +101,14 @@ def main(argv: list[str] | None = None) -> None:
     from .pushit import parse_mkfigs_sh  # the same reading of mkfigs.sh that pushit uses
     ename, _esmdir, array = parse_mkfigs_sh()
 
-    notebooks = args.notebooks or array
+    notebooks = list(dict.fromkeys(args.notebooks or array))
     unknown = [nb for nb in notebooks if nb not in array]
     if unknown:
         sys.exit(f"ERROR: not in the mkfigs.sh array: {' '.join(unknown)}")
     if not notebooks:
         sys.exit("ERROR: no notebooks to run")
+
+    proj = project_args(sh)
 
     # Results of an earlier run of these notebooks must not be mistaken for this run's.
     status_dir = here / f"mkfigs_output_{ename}" / "mkmd" / "status"
@@ -111,7 +117,7 @@ def main(argv: list[str] | None = None) -> None:
             (status_dir / f"{nb}.txt").unlink(missing_ok=True)
 
     print(f"Experiment {ename}: {len(notebooks)} notebook job(s) + 1 summary job")
-    proj = project_args(sh)
+
     ids = []
     for nb in notebooks:
         ids.append(qsub([*proj, "-N", job_name(nb), "-m", "n", "-v", f"MKFIGS_NOTEBOOKS={nb},MKFIGS_SKIP_REPORT=1",
