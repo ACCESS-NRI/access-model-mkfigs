@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 from . import get_mkfigs_version
+from ._paths import SUBMISSION_LOCK
 
 
 def _extract_notebook_error(rendered_path: Path) -> str | None:
@@ -192,6 +193,8 @@ def main() -> None:
         return
     _report(notebooks, ofol, mdfol, log)
     _print_next_steps(Path(args.wfolder), notebooks_dir)
+    if os.environ.get("MKFIGS_REPORT_ONLY") == "1" and os.environ.get("MKFIGS_RELEASE_SUBMISSION_LOCK") == "1":
+        (ofol / SUBMISSION_LOCK).rmdir()
 
 
 def _write_status(mdfol: Path, nb: str, ok: bool) -> None:

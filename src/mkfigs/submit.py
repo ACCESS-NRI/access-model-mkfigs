@@ -32,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ._paths import find_notebooks_dir
+from ._paths import SUBMISSION_LOCK, find_notebooks_dir
 
 # Resources for the summary job: it only reads the per-notebook status files.
 SUMMARY_RESOURCES = "ncpus=1,mem=4GB,jobfs=1GB,walltime=00:15:00"
@@ -110,22 +110,48 @@ def main(argv: list[str] | None = None) -> None:
 
     proj = project_args(sh)
 
-    # Results of an earlier run of these notebooks must not be mistaken for this run's.
-    status_dir = here / f"mkfigs_output_{ename}" / "mkmd" / "status"
+    output = here / f"mkfigs_output_{ename}"
+    lock = output / SUBMISSION_LOCK
     if not args.dry_run:
-        for nb in notebooks:
-            (status_dir / f"{nb}.txt").unlink(missing_ok=True)
+        output.mkdir(parents=True, exist_ok=True)
+        try:
+            lock.mkdir()
+        except FileExistsError:
+            sys.exit(
+                f"ERROR: output for {ename} is locked by a previous submission ({lock}). "
+                "Wait for its summary to finish and retry. If all of its PBS jobs have stopped "
+                "and the lock remains, remove it and retry:\n"
+                f"  rmdir {shlex.quote(str(lock))}"
+            )
 
     print(f"Experiment {ename}: {len(notebooks)} notebook job(s) + 1 summary job")
 
     ids = []
-    for nb in notebooks:
-        ids.append(qsub([*proj, "-N", job_name(nb), "-m", "n", "-v", f"MKFIGS_NOTEBOOKS={nb},MKFIGS_SKIP_REPORT=1",
-                         "mkfigs.sh"], args.dry_run, here))
-    summary = qsub([*proj, "-N", "mk_summary", "-l", SUMMARY_RESOURCES,
-                    "-W", "depend=afterany:" + ":".join(ids),
-                    "-v", "MKFIGS_NOTEBOOKS=" + ":".join(notebooks) + ",MKFIGS_REPORT_ONLY=1",
-                    "mkfigs.sh"], args.dry_run, here)
+    try:
+        if not args.dry_run:
+            # Clear stale results only after acquiring exclusive access to the output.
+            status_dir = output / "mkmd" / "status"
+            for nb in notebooks:
+                (status_dir / f"{nb}.txt").unlink(missing_ok=True)
+
+        for nb in notebooks:
+            ids.append(qsub(
+                [*proj, "-N", job_name(nb), "-m", "n", "-v",
+                 f"MKFIGS_NOTEBOOKS={nb},MKFIGS_SKIP_REPORT=1", "mkfigs.sh"],
+                args.dry_run, here,
+            ))
+        summary = qsub(
+            [*proj, "-N", "mk_summary", "-l", SUMMARY_RESOURCES,
+             "-W", "depend=afterany:" + ":".join(ids),
+             "-v", "MKFIGS_NOTEBOOKS=" + ":".join(notebooks)
+             + ",MKFIGS_REPORT_ONLY=1,MKFIGS_RELEASE_SUBMISSION_LOCK=1",
+             "mkfigs.sh"], args.dry_run, here,
+        )
+    except (OSError, SystemExit):
+        # If any job was submitted, it may still write to the output directory.
+        if not args.dry_run and not ids:
+            lock.rmdir()
+        raise
 
     if args.dry_run:
         print("\nDry run: nothing submitted.")

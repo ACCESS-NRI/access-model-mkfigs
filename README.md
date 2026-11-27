@@ -102,6 +102,12 @@ export PYTHONPATH="$(git rev-parse --show-toplevel)/external/access-model-mkfigs
    with `qsub -v`, i.e. `MKFIGS_NOTEBOOKS="${MKFIGS_NOTEBOOKS:-...}"`. A small summary job runs after the
    others and writes the usual summary and `mkfigs_errors.log`; read `mk_summary.o*` instead of `mkfigs.sh.o*`.
 
+   Submit again for the same experiment from this directory once the summary finishes. The notebooks
+   and summary share `mkfigs_output_<ENAME>/`, so keep direct `qsub mkfigs.sh` runs separate as well.
+   The summary removes the lock automatically. If an interrupted submission or a cancelled
+   summary leaves the lock behind, confirm that all jobs from that submission have stopped,
+   then remove the empty directory with `rmdir mkfigs_output_<ENAME>/.mkfigs-submit.lock` and retry.
+
    **The job exits 0 even if some notebooks failed**, so read the results. The log files are in
    `mkfigs_output_<ENAME>/mkmd/` (not next to the notebooks):
 
