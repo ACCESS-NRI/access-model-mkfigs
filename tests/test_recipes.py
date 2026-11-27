@@ -553,8 +553,11 @@ def test_recipe_categories_nest_the_nav_group(patch_repo_paths):
     pushit.update_mkdocs_nav(ENAME, ["SST", "a", "b"], recipes={"a", "b"}, recipe_categories={"Group B": ["b"]})
     nav = yaml.safe_load((patch_repo_paths / "documentation" / "mkdocs.yml").read_text())["nav"]
     group = next(i for i in nav if pushit.RECIPES_CATEGORY in i)[pushit.RECIPES_CATEGORY]
-    page = lambda nb: {nb: [{"Summary": f"pages/experiments/{ENAME}/{nb}.md"},
-                            {"Recipe": f"pages/experiments/{ENAME}/recipes/{nb}.md"}]}
+
+    def page(nb):
+        return {nb: [{"Summary": f"pages/experiments/{ENAME}/{nb}.md"},
+                     {"Recipe": f"pages/experiments/{ENAME}/recipes/{nb}.md"}]}
+
     assert group == [{"Group B": [page("b")]}, {pushit.UNCATEGORISED_RECIPES: [page("a")]}]
 
 
@@ -575,8 +578,14 @@ def test_run_killable_kills_the_whole_process_group(tmp_path):
     assert time.monotonic() - start < 30
     assert done.timed_out and done.returncode != 0
     child = int(pidfile.read_text())
+    def gone(pid):  # exited or a zombie; it can be reaped between any two looks at /proc, so any OSError = gone
+        try:
+            return "Z" in Path(f"/proc/{pid}/stat").read_text().split()[2]
+        except OSError:
+            return True
+
     for _ in range(50):
-        if not Path(f"/proc/{child}").exists() or "Z" in Path(f"/proc/{child}/stat").read_text().split()[2]:
+        if gone(child):
             break
         time.sleep(0.1)
     else:
@@ -611,4 +620,3 @@ def test_pinned_copy_from_an_earlier_run_is_not_reused(recipe_repo):
                               input_root="/g/data/ol01/run", runner=fake_runner(calls=calls))
     assert not stale.exists()
     assert calls[-1][2].endswith("demo.yml")
-

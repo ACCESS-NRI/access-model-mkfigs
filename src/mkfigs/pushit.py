@@ -165,7 +165,7 @@ def parse_recipes_from_mkfigs_sh() -> list[str]:
     sh = HERE / "mkfigs.sh"
     if not sh.exists():
         return []
-    text = "\n".join(l for l in sh.read_text().splitlines() if not l.lstrip().startswith("#"))
+    text = "\n".join(line for line in sh.read_text().splitlines() if not line.lstrip().startswith("#"))
     arr_match = re.search(r'\brecipes=\(\s*(.*?)\s*\)', text, re.DOTALL)
     recipes: list[str] = []
     if arr_match:
